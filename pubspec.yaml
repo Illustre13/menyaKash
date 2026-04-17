@@ -1,0 +1,56 @@
+name: i_momo
+description: Offline Mobile Money spending tracker — parses MoMo SMS on-device, zero cloud.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # SMS inbox read (historical scan) + live listener. Android-only.
+  telephony: ^0.2.0
+
+  # Local, on-device database. No network drivers included anywhere in this app.
+  drift: ^2.16.0
+  sqlite3_flutter_libs: ^0.5.20
+  path_provider: ^2.1.2
+  path: ^1.9.0
+
+  # Cross-platform drift connection helper — picks a native sqlite3 file
+  # on Android/desktop and a WASM/IndexedDB-backed database on web, so the
+  # same AppDatabase class works in Chrome for UI testing without an
+  # Android SDK. Web is a dev/testing target only: this app's real
+  # features (SMS reading, USSD dialing) are Android-only regardless.
+  drift_flutter: ^0.2.0
+
+  # USSD quick-dial: builds tel: URIs and hands off to the native dialer.
+  url_launcher: ^6.2.5
+
+  # Runtime permission requests (READ_SMS / RECEIVE_SMS / contacts).
+  permission_handler: ^11.3.0
+
+  # Phone contacts sync for the Pay screen's recipient picker. Android-only
+  # in practice for this app, though the plugin itself is cross-platform.
+  flutter_contacts: ^1.1.9+2
+
+  # Charts for the analytics dashboard.
+  fl_chart: ^0.68.0
+
+  intl: ^0.19.0
+  provider: ^6.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+  drift_dev: ^2.16.0
+  build_runner: ^2.4.9
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/brand/

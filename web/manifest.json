@@ -1,0 +1,18 @@
+{
+    "name": "i-momo",
+    "short_name": "i-momo",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#FCFCFB",
+    "theme_color": "#7F56D9",
+    "description": "i-momo — offline mobile money spending tracker (web dev preview).",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "favicon.ico",
+            "sizes": "48x48",
+            "type": "image/x-icon"
+        }
+    ]
+}

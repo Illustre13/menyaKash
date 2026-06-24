@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+
+# This tool's own session state, not part of the app
+/.claude/
+
+# Local-only planning docs and personal data exports — never committed
+/public

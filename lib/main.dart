@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'analytics/analytics_service.dart';
@@ -5,13 +7,16 @@ import 'categorization/categorization_service.dart';
 import 'contacts/contacts_service.dart';
 import 'data/database.dart';
 import 'parsers/momo_parser_registry.dart';
+import 'providers/provider_detector_factory.dart';
 import 'screens/categorize_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pay_screen.dart';
 import 'screens/review_unparsed_screen.dart';
 import 'sms/sms_ingest_service.dart';
+import 'sms/sms_processor.dart';
 import 'theme/app_theme.dart';
+import 'transfers/transfer_matching_engine.dart';
 
 void main() {
   runApp(const IMomoApp());
@@ -43,7 +48,10 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   final _db = AppDatabase();
   late final _registry = MomoParserRegistry();
-  late final _ingestService = SmsIngestService(_db, _registry);
+  late final _detector = buildProviderDetector(_db);
+  late final _processor = SmsProcessor(_db, _registry, _detector);
+  late final _ingestService = SmsIngestService(_db, _detector, _processor);
+  late final _transferEngine = TransferMatchingEngine(_db);
   late final _categorizationService = CategorizationService(_db);
   late final _analyticsService = AnalyticsService(_db);
   final _contactsService = ContactsService();
@@ -67,13 +75,23 @@ class _HomeShellState extends State<HomeShell> {
     final granted = await _ingestService.hasPermissions();
     if (granted) {
       // Permission already granted from a previous run: the historical
-      // scan already happened then, so just resume live listening.
+      // scan already happened then, so just resume live listening and
+      // catch up on any transfer pairs formed by messages received
+      // since the last launch.
       _ingestService.startLiveListener();
+      unawaited(_transferEngine.findAndLinkTransfers());
     }
     setState(() => _alreadyOnboarded = granted);
   }
 
   void _onOnboardingComplete() {
+    // Historical scan just finished, so both sides of any real transfer
+    // (e.g. a BK debit and its matching MTN credit) now exist — this is
+    // the natural point to look for them. Fire-and-forget: transfer
+    // links are a refinement on top of already-correct individual
+    // transactions, not something the user needs to wait on before
+    // seeing their dashboard.
+    unawaited(_transferEngine.findAndLinkTransfers());
     setState(() => _alreadyOnboarded = true);
   }
 

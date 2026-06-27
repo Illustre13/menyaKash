@@ -140,7 +140,6 @@ TransactionsCompanion _tx({
   required DateTime timestamp,
 }) {
   return TransactionsCompanion.insert(
-    provider: 'mtn_rw',
     type: type,
     amount: amount,
     fee: Value(fee),

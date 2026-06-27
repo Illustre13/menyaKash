@@ -1,3 +1,6 @@
+import 'package:crypto/crypto.dart';
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
@@ -16,6 +19,24 @@ enum TransactionType {
   reversed,
   unknown,
 }
+
+/// Whether an [SmsMessages] row has been run through the provider
+/// detector + parser pipeline yet, and what happened when it was.
+/// pending -> exactly one of [matched] / [unrecognized]. A message never
+/// goes back to pending once processed — reprocessing (e.g. after a
+/// parser fix) creates new outcomes rather than mutating history,
+/// mirroring how [Transactions.rawSmsBody] already preserves evidence.
+enum SmsProcessingStatus { pending, matched, unrecognized }
+
+/// How confident [TransferMatchingEngine] is that two [Transactions]
+/// rows are really one internal transfer between the user's own
+/// accounts, not two independent transactions. `confirmed` means an
+/// explicit cross-provider reference matched (e.g. Equity's `MTN Ref.`
+/// against MTN's own transaction id — see docs/SMS_PATTERN_LIBRARY.md
+/// "Cross-provider transfer-matching evidence"); `probable` means only
+/// amount+time+provider-relationship matched, with no shared reference
+/// number to confirm it.
+enum TransferMatchConfidence { confirmed, probable }
 
 class Categories extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -51,11 +72,232 @@ class CategoryCodes extends Table {
       ];
 }
 
+/// A recognized financial institution/product that can send transaction
+/// SMS — mobile money (MTN MoMo, Airtel Money, eKash) or a bank (Bank of
+/// Kigali, Equity). This is the real provider abstraction the schema
+/// lacked in v1, where `Transactions.provider` was a bare unvalidated
+/// string. Seeded once via [AppDatabase._seedProviders] on first
+/// creation/migration — see that method for the confirmed-real sender
+/// patterns this seed data is based on (docs/AUDIT_PHASE_0.md §3.2).
+class FinancialProviders extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// Stable machine identifier, e.g. "mtn_momo_rw". Referenced by
+  /// [Transactions.providerId] and by parser/detector code — never
+  /// shown to the user directly.
+  TextColumn get code => text().withLength(min: 1, max: 32)();
+
+  /// Human-readable name for UI, e.g. "MTN Mobile Money".
+  TextColumn get displayName => text().withLength(min: 1, max: 64)();
+
+  /// "mobile_money" or "bank" — coarse grouping for the provider-picker
+  /// UI (spec Phase 6) and for deciding which parser family applies.
+  TextColumn get category => text().withLength(min: 1, max: 32)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {code}
+      ];
+}
+
+/// A user-facing wallet/account, e.g. "My MTN MoMo" or "My BK Account".
+/// Deliberately carries **no stored balance column** — an account's
+/// current balance is always computed on demand from the most recent
+/// [Transactions.balanceAfter] for that account (see
+/// `AccountsService.currentBalance`), the same way this app already
+/// reported balance pre-Phase-3. Storing a running balance here would
+/// create a second source of truth that could silently drift from what
+/// the transaction history actually shows if a transaction is ever
+/// edited or deleted — for a financial ledger, the history must remain
+/// the single source of truth.
+///
+/// One [FinancialProviders] row can back more than one account in
+/// principle (e.g. two BK accounts), so this is deliberately a
+/// separate table rather than reusing `FinancialProviders` directly —
+/// today's seeding creates exactly one account per seeded provider
+/// (see `AppDatabase._seedDefaultAccounts`), since no real multi-account
+/// case has been observed yet, but the schema doesn't assume that stays
+/// true.
+class Accounts extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  IntColumn get providerId =>
+      integer().references(FinancialProviders, #id, onDelete: KeyAction.cascade)();
+
+  /// User-facing label, e.g. "My MTN MoMo". Defaults to the provider's
+  /// own display name at creation time but is independently editable
+  /// (spec Phase 7's account list implies users may rename accounts).
+  TextColumn get label => text().withLength(min: 1, max: 64)();
+}
+
+/// A real-world merchant/payee, with its name kept separate from any
+/// trailing account/till code — the Phase 4 fix for the confirmed real
+/// bug where "THE FAMILYS BAKERY LTD 096957" (merchant name + numeric
+/// code) was stored as one opaque, uncategorizable string (see
+/// docs/AUDIT_PHASE_0.md §3.3).
+///
+/// This table is added *alongside* the existing [CategoryCodes] table,
+/// not as its replacement yet — [CategoryCodes] still backs the
+/// Categorize/Pay/Frequent-codes screens as-is. Wiring those screens to
+/// query [Merchants] instead is a deliberately separate follow-up, so
+/// this migration doesn't risk breaking working, already-shipped UI in
+/// the same change that introduces the new plumbing.
+class Merchants extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// The merchant name as extracted from the SMS, with the trailing
+  /// account/till code stripped — e.g. "THE FAMILYS BAKERY LTD" from
+  /// "THE FAMILYS BAKERY LTD 096957". See
+  /// `MerchantNormalizationService.extractMerchantName`.
+  TextColumn get name => text().withLength(min: 1, max: 128)();
+
+  /// Uppercased, punctuation-stripped, whitespace-collapsed form of
+  /// [name] — the actual matching key, so "Family Bakery Ltd" and
+  /// "FAMILY BAKERY LTD." (different real messages, same real business)
+  /// resolve to the same merchant instead of creating two rows.
+  TextColumn get normalizedName => text().withLength(min: 1, max: 128)();
+
+  IntColumn get categoryId =>
+      integer().nullable().references(Categories, #id)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {normalizedName}
+      ];
+}
+
+/// Links two [Transactions] rows that are really one internal transfer
+/// between the user's own accounts (e.g. a BK debit and an MTN MoMo
+/// credit for the same real-world movement of money), so analytics can
+/// exclude them from income/expense totals instead of double-counting
+/// — the Phase 3 fix for the confirmed real problem in
+/// docs/AUDIT_PHASE_0.md §3.2 (an Equity "sent" and an MTN "received"
+/// message, 3 seconds apart, same amount, explicitly cross-referencing
+/// each other, that v1/v2 would have recorded as unrelated
+/// income+expense rather than one transfer).
+///
+/// `fromTransactionId`/`toTransactionId` are the debit and credit side
+/// respectively — not "first found"/"second found" — so a query can
+/// always tell which account lost the money and which gained it without
+/// re-inspecting each transaction's type.
+class TransferLinks extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  IntColumn get fromTransactionId =>
+      integer().references(Transactions, #id, onDelete: KeyAction.cascade)();
+  IntColumn get toTransactionId =>
+      integer().references(Transactions, #id, onDelete: KeyAction.cascade)();
+
+  TextColumn get confidence => textEnum<TransferMatchConfidence>()();
+
+  /// Free-text note on *why* the engine matched these two, e.g. "matched
+  /// via shared reference 541077019015" or "matched via amount+time
+  /// proximity, no shared reference" — surfaced in a future "why is
+  /// this a transfer?" UI affordance rather than being a silent,
+  /// unexplainable link.
+  TextColumn get matchReason => text()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {fromTransactionId, toTransactionId}
+      ];
+}
+
+/// Sender-name patterns that identify a [FinancialProviders] row. A
+/// provider can have multiple known senders (confirmed real example:
+/// MTN's `M-Money` shortcode carries both MoMo P2P/merchant traffic and
+/// eKash traffic — two providers, one sender — so this is a many-to-one
+/// mapping of sender string -> provider, not the reverse).
+class ProviderSenders extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get senderPattern => text().withLength(min: 1, max: 64)();
+
+  IntColumn get providerId =>
+      integer().references(FinancialProviders, #id, onDelete: KeyAction.cascade)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {senderPattern, providerId}
+      ];
+}
+
+/// Raw SMS evidence, stored immediately on arrival before any parsing
+/// happens — the "never directly process SMS into expenses" fix. Every
+/// SMS from a recognized-provider sender lands here first with
+/// [SmsProcessingStatus.pending]; a separate processing step reads
+/// pending rows, resolves a provider via the detector, attempts to
+/// parse, and writes exactly one [Transactions] or [UnparsedMessages]
+/// row before flipping this row to matched/unrecognized. This table is
+/// permanent evidence and is never deleted or overwritten by
+/// reprocessing — see [SmsProcessingStatus] doc.
+class SmsMessages extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get sender => text()();
+  TextColumn get body => text()();
+  DateTimeColumn get receivedAt => dateTime()();
+
+  /// SHA-256 of `sender|body|receivedAt.millisecondsSinceEpoch`, computed
+  /// at insert time (see [AppDatabase.hashSmsMessage]). This is the
+  /// dedup key: re-running a historical scan (a known v1 gap — see
+  /// docs/AUDIT_PHASE_0.md §3.5) hits the unique constraint below and is
+  /// silently skipped instead of double-inserting.
+  TextColumn get smsHash => text().withLength(min: 64, max: 64)();
+
+  /// Nullable: set once a provider is identified for this message.
+  /// Null means either not yet processed, or processed but no known
+  /// provider matched the sender at all (a step before "parsed the
+  /// body" — see ProviderDetector).
+  IntColumn get providerId =>
+      integer().nullable().references(FinancialProviders, #id)();
+
+  TextColumn get processingStatus => textEnum<SmsProcessingStatus>()
+      .withDefault(Constant(SmsProcessingStatus.pending.name))();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {smsHash}
+      ];
+}
+
 class Transactions extends Table {
   IntColumn get id => integer().autoIncrement()();
 
-  /// e.g. "mtn_rw", "airtel_rw" — matches a MomoParser.providerId.
-  TextColumn get provider => text().withLength(min: 1, max: 32)();
+  /// Links back to the exact SMS this transaction was extracted from —
+  /// the "financial ledger built from evidence" link the v1 schema
+  /// lacked (v1 only kept a copy of the body on the transaction row
+  /// itself, with no way to distinguish "reprocessed the same message"
+  /// from "a genuinely new message"). Nullable only for rows migrated
+  /// from v1 history where no matching sms_messages row could be
+  /// reconstructed with full confidence (see migration `onUpgrade`).
+  IntColumn get smsMessageId =>
+      integer().nullable().references(SmsMessages, #id)();
+
+  /// Real FK now — was a bare unvalidated string in v1. See
+  /// [FinancialProviders].
+  IntColumn get providerId =>
+      integer().nullable().references(FinancialProviders, #id)();
+
+  /// Which of the user's own [Accounts] this transaction moved money
+  /// into or out of. Nullable for the same reason [smsMessageId] is:
+  /// v1/v2 history predates accounts existing at all, and v2->v3
+  /// migrated rows are attributed to the default account for their
+  /// provider (see `AppDatabase._backfillAccountsFromV2`) rather than
+  /// left permanently unset.
+  IntColumn get accountId => integer().nullable().references(Accounts, #id)();
+
+  /// Which real-world [Merchants] row this transaction's counterparty
+  /// resolves to, once merchant-name normalization has run on it (Phase
+  /// 4). Nullable and independent of [categoryId]/[counterparty] — this
+  /// is new plumbing that doesn't yet drive any UI; existing
+  /// categorization continues to work off [counterparty] +
+  /// `CategoryCodes` exactly as before.
+  IntColumn get merchantId => integer().nullable().references(Merchants, #id)();
 
   TextColumn get type => textEnum<TransactionType>()();
 
@@ -72,31 +314,227 @@ class Transactions extends Table {
   DateTimeColumn get timestamp => dateTime()();
 
   /// Full original SMS body, kept for re-parsing if a regex is fixed later
-  /// and for the "Review unparsed" screen's context.
+  /// and for the "Review unparsed" screen's context. Now also duplicated
+  /// in [SmsMessages.body] via [smsMessageId] — kept here too rather than
+  /// dropped, since removing a NOT NULL column that many existing v1 rows
+  /// depend on is a bigger migration risk than a few KB of duplication.
   TextColumn get rawSmsBody => text()();
 
   IntColumn get categoryId =>
       integer().nullable().references(Categories, #id)();
 }
 
-/// Messages from a known MoMo sender that no registered parser could
+/// Messages from a known-provider sender that no registered parser could
 /// match. Surfaced in the "Review" screen so the parser can be extended
-/// instead of silently dropping data.
+/// instead of silently dropping data. Retained as-is post-migration for
+/// the existing Review screen; new unrecognized messages are written
+/// here *and* have their [SmsMessages] row flipped to `unrecognized` —
+/// this table is now a projection of "which sms_messages rows need
+/// human attention," not the primary record.
 class UnparsedMessages extends Table {
   IntColumn get id => integer().autoIncrement()();
+
+  /// Links to the evidence row. Nullable for the same v1-migration
+  /// reason as [Transactions.smsMessageId].
+  IntColumn get smsMessageId =>
+      integer().nullable().references(SmsMessages, #id)();
+
   TextColumn get sender => text()();
   TextColumn get body => text()();
   DateTimeColumn get receivedAt => dateTime()();
   BoolColumn get resolved => boolean().withDefault(const Constant(false))();
 }
 
-@DriftDatabase(tables: [Categories, CategoryCodes, Transactions, UnparsedMessages])
+@DriftDatabase(tables: [
+  Categories,
+  CategoryCodes,
+  Transactions,
+  UnparsedMessages,
+  FinancialProviders,
+  ProviderSenders,
+  SmsMessages,
+  Accounts,
+  Merchants,
+  TransferLinks,
+])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 3;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+          await _seedProviders();
+          await _seedDefaultAccounts();
+        },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.createTable(financialProviders);
+            await m.createTable(providerSenders);
+            await m.createTable(smsMessages);
+            await m.addColumn(transactions, transactions.smsMessageId);
+            await m.addColumn(transactions, transactions.providerId);
+            await m.addColumn(unparsedMessages, unparsedMessages.smsMessageId);
+            await _seedProviders();
+            await _backfillSmsMessagesFromV1();
+          }
+          if (from < 3) {
+            await m.createTable(accounts);
+            await m.createTable(merchants);
+            await m.createTable(transferLinks);
+            await m.addColumn(transactions, transactions.accountId);
+            await m.addColumn(transactions, transactions.merchantId);
+            await _seedDefaultAccounts();
+            await _backfillAccountsFromV2();
+          }
+        },
+      );
+
+  /// Confirmed-real sender patterns from a genuine 8,364-message SMS
+  /// export (docs/AUDIT_PHASE_0.md §3.2) — every sender string here was
+  /// directly observed in real device data, not guessed. `M-Money`
+  /// intentionally maps to two providers (mtn_momo_rw and ekash_rw)
+  /// since both products share that shortcode in practice; the
+  /// ProviderDetector (lib/providers/) resolves the ambiguity by
+  /// matching message-body shape, not sender alone.
+  Future<void> _seedProviders() async {
+    final seed = <(String code, String displayName, String category, List<String> senders)>[
+      ('mtn_momo_rw', 'MTN Mobile Money', 'mobile_money', ['M-Money', 'MTN', 'MoMo', 'MTNRWANDA']),
+      ('ekash_rw', 'eKash', 'mobile_money', ['M-Money', 'Ekash', 'eKash']),
+      ('airtel_money_rw', 'Airtel Money', 'mobile_money', ['AirtelMoney', 'AIRTELMONEY']),
+      ('bk_bank_rw', 'Bank of Kigali', 'bank', ['BKeBANK', 'BK BANK', 'BK ARENA']),
+      ('equity_bank_rw', 'Equity Bank', 'bank', ['EQUITYBANK']),
+    ];
+
+    for (final (code, displayName, category, senders) in seed) {
+      final providerId = await into(financialProviders).insertOnConflictUpdate(
+        FinancialProvidersCompanion.insert(
+          code: code,
+          displayName: displayName,
+          category: category,
+        ),
+      );
+      for (final sender in senders) {
+        await into(providerSenders).insertOnConflictUpdate(
+          ProviderSendersCompanion.insert(senderPattern: sender, providerId: providerId),
+        );
+      }
+    }
+  }
+
+  /// Reconstructs [SmsMessages] rows for pre-v2 history so existing
+  /// transactions/unparsed messages gain evidence links without losing
+  /// any data. Best-effort: v1 never stored a sender on [Transactions],
+  /// so backfilled rows use the transaction's resolved provider's first
+  /// known sender as a placeholder sender string — this is documented
+  /// as an approximation, not a claim of the original literal sender.
+  Future<void> _backfillSmsMessagesFromV1() async {
+    final mtnProvider = await (select(financialProviders)
+          ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
+        .getSingleOrNull();
+    final placeholderSender = mtnProvider == null
+        ? 'unknown'
+        : (await (select(providerSenders)
+                  ..where((tbl) => tbl.providerId.equals(mtnProvider.id))
+                  ..limit(1))
+                .getSingleOrNull())
+                ?.senderPattern ??
+            'unknown';
+
+    final existingTransactions = await select(transactions).get();
+    for (final tx in existingTransactions) {
+      final hash = hashSmsMessage(
+        sender: placeholderSender,
+        body: tx.rawSmsBody,
+        receivedAt: tx.timestamp,
+      );
+      final smsId = await into(smsMessages).insertOnConflictUpdate(
+        SmsMessagesCompanion.insert(
+          sender: placeholderSender,
+          body: tx.rawSmsBody,
+          receivedAt: tx.timestamp,
+          smsHash: hash,
+          providerId: Value(mtnProvider?.id),
+          processingStatus: const Value(SmsProcessingStatus.matched),
+        ),
+      );
+      await (update(transactions)..where((tbl) => tbl.id.equals(tx.id)))
+          .write(TransactionsCompanion(
+        smsMessageId: Value(smsId),
+        providerId: Value(mtnProvider?.id),
+      ));
+    }
+
+    final existingUnparsed = await select(unparsedMessages).get();
+    for (final msg in existingUnparsed) {
+      final hash = hashSmsMessage(
+        sender: msg.sender,
+        body: msg.body,
+        receivedAt: msg.receivedAt,
+      );
+      final smsId = await into(smsMessages).insertOnConflictUpdate(
+        SmsMessagesCompanion.insert(
+          sender: msg.sender,
+          body: msg.body,
+          receivedAt: msg.receivedAt,
+          smsHash: hash,
+          processingStatus: const Value(SmsProcessingStatus.unrecognized),
+        ),
+      );
+      await (update(unparsedMessages)..where((tbl) => tbl.id.equals(msg.id)))
+          .write(UnparsedMessagesCompanion(smsMessageId: Value(smsId)));
+    }
+  }
+
+  /// One default [Accounts] row per seeded [FinancialProviders] row,
+  /// e.g. "My MTN Mobile Money" for `mtn_momo_rw`. Real multi-account
+  /// support (spec Phase 7's account list, multiple BK accounts, etc.)
+  /// can add more rows against the same provider later — this seed is
+  /// deliberately the minimum needed for every existing transaction to
+  /// have *an* account to attribute to, not a claim that one-account-
+  /// per-provider is a permanent constraint.
+  Future<void> _seedDefaultAccounts() async {
+    final providers = await select(financialProviders).get();
+    for (final provider in providers) {
+      final existing = await (select(accounts)
+            ..where((tbl) => tbl.providerId.equals(provider.id)))
+          .getSingleOrNull();
+      if (existing != null) continue;
+      await into(accounts).insert(
+        AccountsCompanion.insert(
+          providerId: provider.id,
+          label: 'My ${provider.displayName}',
+        ),
+      );
+    }
+  }
+
+  /// Attributes every pre-v3 transaction to its provider's default
+  /// account, using [Transactions.providerId] (already backfilled by
+  /// [_backfillSmsMessagesFromV1] for v1 rows, and populated directly
+  /// for v2 rows) to look up the matching [Accounts] row. Transactions
+  /// with no resolved provider at all (should be rare — only messages
+  /// that matched no provider during v1/v2 ingestion) are left with a
+  /// null accountId rather than guessed at.
+  Future<void> _backfillAccountsFromV2() async {
+    final txWithoutAccount =
+        await (select(transactions)..where((tbl) => tbl.accountId.isNull())).get();
+
+    for (final tx in txWithoutAccount) {
+      if (tx.providerId == null) continue;
+      final account = await (select(accounts)
+            ..where((tbl) => tbl.providerId.equals(tx.providerId!))
+            ..limit(1))
+          .getSingleOrNull();
+      if (account == null) continue;
+      await (update(transactions)..where((tbl) => tbl.id.equals(tx.id)))
+          .write(TransactionsCompanion(accountId: Value(account.id)));
+    }
+  }
 
   Future<Category?> findCategoryByCode(String code) async {
     final mapping = await (select(categoryCodes)
@@ -160,6 +598,20 @@ class AppDatabase extends _$AppDatabase {
     }
     return result;
   }
+}
+
+/// Deterministic dedup key for an [SmsMessages] row. Same inputs always
+/// produce the same hash, so re-scanning the same inbox range is a
+/// no-op against the table's unique constraint on [SmsMessages.smsHash]
+/// rather than a double-insert (the v1 gap documented in
+/// docs/AUDIT_PHASE_0.md §3.5).
+String hashSmsMessage({
+  required String sender,
+  required String body,
+  required DateTime receivedAt,
+}) {
+  final input = '$sender|$body|${receivedAt.millisecondsSinceEpoch}';
+  return sha256.convert(utf8.encode(input)).toString();
 }
 
 /// Read-model for the Frequent Codes screen: a counterparty joined with

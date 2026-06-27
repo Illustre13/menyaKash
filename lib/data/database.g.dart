@@ -483,15 +483,30 @@ class $TransactionsTable extends Transactions
       requiredDuringInsert: false,
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
-  static const VerificationMeta _providerMeta =
-      const VerificationMeta('provider');
+  static const VerificationMeta _smsMessageIdMeta =
+      const VerificationMeta('smsMessageId');
   @override
-  late final GeneratedColumn<String> provider = GeneratedColumn<String>(
-      'provider', aliasedName, false,
-      additionalChecks:
-          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 32),
-      type: DriftSqlType.string,
-      requiredDuringInsert: true);
+  late final GeneratedColumn<int> smsMessageId = GeneratedColumn<int>(
+      'sms_message_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _providerIdMeta =
+      const VerificationMeta('providerId');
+  @override
+  late final GeneratedColumn<int> providerId = GeneratedColumn<int>(
+      'provider_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _accountIdMeta =
+      const VerificationMeta('accountId');
+  @override
+  late final GeneratedColumn<int> accountId = GeneratedColumn<int>(
+      'account_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _merchantIdMeta =
+      const VerificationMeta('merchantId');
+  @override
+  late final GeneratedColumn<int> merchantId = GeneratedColumn<int>(
+      'merchant_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
   @override
   late final GeneratedColumnWithTypeConverter<TransactionType, String> type =
       GeneratedColumn<String>('type', aliasedName, false,
@@ -547,7 +562,10 @@ class $TransactionsTable extends Transactions
   @override
   List<GeneratedColumn> get $columns => [
         id,
-        provider,
+        smsMessageId,
+        providerId,
+        accountId,
+        merchantId,
         type,
         amount,
         fee,
@@ -571,11 +589,27 @@ class $TransactionsTable extends Transactions
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     }
-    if (data.containsKey('provider')) {
-      context.handle(_providerMeta,
-          provider.isAcceptableOrUnknown(data['provider']!, _providerMeta));
-    } else if (isInserting) {
-      context.missing(_providerMeta);
+    if (data.containsKey('sms_message_id')) {
+      context.handle(
+          _smsMessageIdMeta,
+          smsMessageId.isAcceptableOrUnknown(
+              data['sms_message_id']!, _smsMessageIdMeta));
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+          _providerIdMeta,
+          providerId.isAcceptableOrUnknown(
+              data['provider_id']!, _providerIdMeta));
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(_accountIdMeta,
+          accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta));
+    }
+    if (data.containsKey('merchant_id')) {
+      context.handle(
+          _merchantIdMeta,
+          merchantId.isAcceptableOrUnknown(
+              data['merchant_id']!, _merchantIdMeta));
     }
     if (data.containsKey('amount')) {
       context.handle(_amountMeta,
@@ -634,8 +668,14 @@ class $TransactionsTable extends Transactions
     return Transaction(
       id: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
-      provider: attachedDatabase.typeMapping
-          .read(DriftSqlType.string, data['${effectivePrefix}provider'])!,
+      smsMessageId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}sms_message_id']),
+      providerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}provider_id']),
+      accountId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}account_id']),
+      merchantId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}merchant_id']),
       type: $TransactionsTable.$convertertype.fromSql(attachedDatabase
           .typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}type'])!),
@@ -670,8 +710,34 @@ class $TransactionsTable extends Transactions
 class Transaction extends DataClass implements Insertable<Transaction> {
   final int id;
 
-  /// e.g. "mtn_rw", "airtel_rw" — matches a MomoParser.providerId.
-  final String provider;
+  /// Links back to the exact SMS this transaction was extracted from —
+  /// the "financial ledger built from evidence" link the v1 schema
+  /// lacked (v1 only kept a copy of the body on the transaction row
+  /// itself, with no way to distinguish "reprocessed the same message"
+  /// from "a genuinely new message"). Nullable only for rows migrated
+  /// from v1 history where no matching sms_messages row could be
+  /// reconstructed with full confidence (see migration `onUpgrade`).
+  final int? smsMessageId;
+
+  /// Real FK now — was a bare unvalidated string in v1. See
+  /// [FinancialProviders].
+  final int? providerId;
+
+  /// Which of the user's own [Accounts] this transaction moved money
+  /// into or out of. Nullable for the same reason [smsMessageId] is:
+  /// v1/v2 history predates accounts existing at all, and v2->v3
+  /// migrated rows are attributed to the default account for their
+  /// provider (see `AppDatabase._backfillAccountsFromV2`) rather than
+  /// left permanently unset.
+  final int? accountId;
+
+  /// Which real-world [Merchants] row this transaction's counterparty
+  /// resolves to, once merchant-name normalization has run on it (Phase
+  /// 4). Nullable and independent of [categoryId]/[counterparty] — this
+  /// is new plumbing that doesn't yet drive any UI; existing
+  /// categorization continues to work off [counterparty] +
+  /// `CategoryCodes` exactly as before.
+  final int? merchantId;
   final TransactionType type;
   final double amount;
   final double fee;
@@ -684,12 +750,18 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   final DateTime timestamp;
 
   /// Full original SMS body, kept for re-parsing if a regex is fixed later
-  /// and for the "Review unparsed" screen's context.
+  /// and for the "Review unparsed" screen's context. Now also duplicated
+  /// in [SmsMessages.body] via [smsMessageId] — kept here too rather than
+  /// dropped, since removing a NOT NULL column that many existing v1 rows
+  /// depend on is a bigger migration risk than a few KB of duplication.
   final String rawSmsBody;
   final int? categoryId;
   const Transaction(
       {required this.id,
-      required this.provider,
+      this.smsMessageId,
+      this.providerId,
+      this.accountId,
+      this.merchantId,
       required this.type,
       required this.amount,
       required this.fee,
@@ -703,7 +775,18 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
-    map['provider'] = Variable<String>(provider);
+    if (!nullToAbsent || smsMessageId != null) {
+      map['sms_message_id'] = Variable<int>(smsMessageId);
+    }
+    if (!nullToAbsent || providerId != null) {
+      map['provider_id'] = Variable<int>(providerId);
+    }
+    if (!nullToAbsent || accountId != null) {
+      map['account_id'] = Variable<int>(accountId);
+    }
+    if (!nullToAbsent || merchantId != null) {
+      map['merchant_id'] = Variable<int>(merchantId);
+    }
     {
       map['type'] =
           Variable<String>($TransactionsTable.$convertertype.toSql(type));
@@ -730,7 +813,18 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   TransactionsCompanion toCompanion(bool nullToAbsent) {
     return TransactionsCompanion(
       id: Value(id),
-      provider: Value(provider),
+      smsMessageId: smsMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(smsMessageId),
+      providerId: providerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(providerId),
+      accountId: accountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accountId),
+      merchantId: merchantId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(merchantId),
       type: Value(type),
       amount: Value(amount),
       fee: Value(fee),
@@ -755,7 +849,10 @@ class Transaction extends DataClass implements Insertable<Transaction> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return Transaction(
       id: serializer.fromJson<int>(json['id']),
-      provider: serializer.fromJson<String>(json['provider']),
+      smsMessageId: serializer.fromJson<int?>(json['smsMessageId']),
+      providerId: serializer.fromJson<int?>(json['providerId']),
+      accountId: serializer.fromJson<int?>(json['accountId']),
+      merchantId: serializer.fromJson<int?>(json['merchantId']),
       type: $TransactionsTable.$convertertype
           .fromJson(serializer.fromJson<String>(json['type'])),
       amount: serializer.fromJson<double>(json['amount']),
@@ -773,7 +870,10 @@ class Transaction extends DataClass implements Insertable<Transaction> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
-      'provider': serializer.toJson<String>(provider),
+      'smsMessageId': serializer.toJson<int?>(smsMessageId),
+      'providerId': serializer.toJson<int?>(providerId),
+      'accountId': serializer.toJson<int?>(accountId),
+      'merchantId': serializer.toJson<int?>(merchantId),
       'type': serializer
           .toJson<String>($TransactionsTable.$convertertype.toJson(type)),
       'amount': serializer.toJson<double>(amount),
@@ -789,7 +889,10 @@ class Transaction extends DataClass implements Insertable<Transaction> {
 
   Transaction copyWith(
           {int? id,
-          String? provider,
+          Value<int?> smsMessageId = const Value.absent(),
+          Value<int?> providerId = const Value.absent(),
+          Value<int?> accountId = const Value.absent(),
+          Value<int?> merchantId = const Value.absent(),
           TransactionType? type,
           double? amount,
           double? fee,
@@ -801,7 +904,11 @@ class Transaction extends DataClass implements Insertable<Transaction> {
           Value<int?> categoryId = const Value.absent()}) =>
       Transaction(
         id: id ?? this.id,
-        provider: provider ?? this.provider,
+        smsMessageId:
+            smsMessageId.present ? smsMessageId.value : this.smsMessageId,
+        providerId: providerId.present ? providerId.value : this.providerId,
+        accountId: accountId.present ? accountId.value : this.accountId,
+        merchantId: merchantId.present ? merchantId.value : this.merchantId,
         type: type ?? this.type,
         amount: amount ?? this.amount,
         fee: fee ?? this.fee,
@@ -817,7 +924,14 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   Transaction copyWithCompanion(TransactionsCompanion data) {
     return Transaction(
       id: data.id.present ? data.id.value : this.id,
-      provider: data.provider.present ? data.provider.value : this.provider,
+      smsMessageId: data.smsMessageId.present
+          ? data.smsMessageId.value
+          : this.smsMessageId,
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      merchantId:
+          data.merchantId.present ? data.merchantId.value : this.merchantId,
       type: data.type.present ? data.type.value : this.type,
       amount: data.amount.present ? data.amount.value : this.amount,
       fee: data.fee.present ? data.fee.value : this.fee,
@@ -840,7 +954,10 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   String toString() {
     return (StringBuffer('Transaction(')
           ..write('id: $id, ')
-          ..write('provider: $provider, ')
+          ..write('smsMessageId: $smsMessageId, ')
+          ..write('providerId: $providerId, ')
+          ..write('accountId: $accountId, ')
+          ..write('merchantId: $merchantId, ')
           ..write('type: $type, ')
           ..write('amount: $amount, ')
           ..write('fee: $fee, ')
@@ -855,14 +972,30 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   }
 
   @override
-  int get hashCode => Object.hash(id, provider, type, amount, fee, counterparty,
-      txRef, balanceAfter, timestamp, rawSmsBody, categoryId);
+  int get hashCode => Object.hash(
+      id,
+      smsMessageId,
+      providerId,
+      accountId,
+      merchantId,
+      type,
+      amount,
+      fee,
+      counterparty,
+      txRef,
+      balanceAfter,
+      timestamp,
+      rawSmsBody,
+      categoryId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is Transaction &&
           other.id == this.id &&
-          other.provider == this.provider &&
+          other.smsMessageId == this.smsMessageId &&
+          other.providerId == this.providerId &&
+          other.accountId == this.accountId &&
+          other.merchantId == this.merchantId &&
           other.type == this.type &&
           other.amount == this.amount &&
           other.fee == this.fee &&
@@ -876,7 +1009,10 @@ class Transaction extends DataClass implements Insertable<Transaction> {
 
 class TransactionsCompanion extends UpdateCompanion<Transaction> {
   final Value<int> id;
-  final Value<String> provider;
+  final Value<int?> smsMessageId;
+  final Value<int?> providerId;
+  final Value<int?> accountId;
+  final Value<int?> merchantId;
   final Value<TransactionType> type;
   final Value<double> amount;
   final Value<double> fee;
@@ -888,7 +1024,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
   final Value<int?> categoryId;
   const TransactionsCompanion({
     this.id = const Value.absent(),
-    this.provider = const Value.absent(),
+    this.smsMessageId = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.merchantId = const Value.absent(),
     this.type = const Value.absent(),
     this.amount = const Value.absent(),
     this.fee = const Value.absent(),
@@ -901,7 +1040,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
   });
   TransactionsCompanion.insert({
     this.id = const Value.absent(),
-    required String provider,
+    this.smsMessageId = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.merchantId = const Value.absent(),
     required TransactionType type,
     required double amount,
     this.fee = const Value.absent(),
@@ -911,14 +1053,16 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     required DateTime timestamp,
     required String rawSmsBody,
     this.categoryId = const Value.absent(),
-  })  : provider = Value(provider),
-        type = Value(type),
+  })  : type = Value(type),
         amount = Value(amount),
         timestamp = Value(timestamp),
         rawSmsBody = Value(rawSmsBody);
   static Insertable<Transaction> custom({
     Expression<int>? id,
-    Expression<String>? provider,
+    Expression<int>? smsMessageId,
+    Expression<int>? providerId,
+    Expression<int>? accountId,
+    Expression<int>? merchantId,
     Expression<String>? type,
     Expression<double>? amount,
     Expression<double>? fee,
@@ -931,7 +1075,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
-      if (provider != null) 'provider': provider,
+      if (smsMessageId != null) 'sms_message_id': smsMessageId,
+      if (providerId != null) 'provider_id': providerId,
+      if (accountId != null) 'account_id': accountId,
+      if (merchantId != null) 'merchant_id': merchantId,
       if (type != null) 'type': type,
       if (amount != null) 'amount': amount,
       if (fee != null) 'fee': fee,
@@ -946,7 +1093,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
 
   TransactionsCompanion copyWith(
       {Value<int>? id,
-      Value<String>? provider,
+      Value<int?>? smsMessageId,
+      Value<int?>? providerId,
+      Value<int?>? accountId,
+      Value<int?>? merchantId,
       Value<TransactionType>? type,
       Value<double>? amount,
       Value<double>? fee,
@@ -958,7 +1108,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
       Value<int?>? categoryId}) {
     return TransactionsCompanion(
       id: id ?? this.id,
-      provider: provider ?? this.provider,
+      smsMessageId: smsMessageId ?? this.smsMessageId,
+      providerId: providerId ?? this.providerId,
+      accountId: accountId ?? this.accountId,
+      merchantId: merchantId ?? this.merchantId,
       type: type ?? this.type,
       amount: amount ?? this.amount,
       fee: fee ?? this.fee,
@@ -977,8 +1130,17 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     if (id.present) {
       map['id'] = Variable<int>(id.value);
     }
-    if (provider.present) {
-      map['provider'] = Variable<String>(provider.value);
+    if (smsMessageId.present) {
+      map['sms_message_id'] = Variable<int>(smsMessageId.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<int>(providerId.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<int>(accountId.value);
+    }
+    if (merchantId.present) {
+      map['merchant_id'] = Variable<int>(merchantId.value);
     }
     if (type.present) {
       map['type'] =
@@ -1015,7 +1177,10 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
   String toString() {
     return (StringBuffer('TransactionsCompanion(')
           ..write('id: $id, ')
-          ..write('provider: $provider, ')
+          ..write('smsMessageId: $smsMessageId, ')
+          ..write('providerId: $providerId, ')
+          ..write('accountId: $accountId, ')
+          ..write('merchantId: $merchantId, ')
           ..write('type: $type, ')
           ..write('amount: $amount, ')
           ..write('fee: $fee, ')
@@ -1045,6 +1210,12 @@ class $UnparsedMessagesTable extends UnparsedMessages
       requiredDuringInsert: false,
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _smsMessageIdMeta =
+      const VerificationMeta('smsMessageId');
+  @override
+  late final GeneratedColumn<int> smsMessageId = GeneratedColumn<int>(
+      'sms_message_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
   static const VerificationMeta _senderMeta = const VerificationMeta('sender');
   @override
   late final GeneratedColumn<String> sender = GeneratedColumn<String>(
@@ -1073,7 +1244,7 @@ class $UnparsedMessagesTable extends UnparsedMessages
       defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns =>
-      [id, sender, body, receivedAt, resolved];
+      [id, smsMessageId, sender, body, receivedAt, resolved];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1086,6 +1257,12 @@ class $UnparsedMessagesTable extends UnparsedMessages
     final data = instance.toColumns(true);
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('sms_message_id')) {
+      context.handle(
+          _smsMessageIdMeta,
+          smsMessageId.isAcceptableOrUnknown(
+              data['sms_message_id']!, _smsMessageIdMeta));
     }
     if (data.containsKey('sender')) {
       context.handle(_senderMeta,
@@ -1122,6 +1299,8 @@ class $UnparsedMessagesTable extends UnparsedMessages
     return UnparsedMessage(
       id: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      smsMessageId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}sms_message_id']),
       sender: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}sender'])!,
       body: attachedDatabase.typeMapping
@@ -1141,12 +1320,17 @@ class $UnparsedMessagesTable extends UnparsedMessages
 
 class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   final int id;
+
+  /// Links to the evidence row. Nullable for the same v1-migration
+  /// reason as [Transactions.smsMessageId].
+  final int? smsMessageId;
   final String sender;
   final String body;
   final DateTime receivedAt;
   final bool resolved;
   const UnparsedMessage(
       {required this.id,
+      this.smsMessageId,
       required this.sender,
       required this.body,
       required this.receivedAt,
@@ -1155,6 +1339,9 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
+    if (!nullToAbsent || smsMessageId != null) {
+      map['sms_message_id'] = Variable<int>(smsMessageId);
+    }
     map['sender'] = Variable<String>(sender);
     map['body'] = Variable<String>(body);
     map['received_at'] = Variable<DateTime>(receivedAt);
@@ -1165,6 +1352,9 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   UnparsedMessagesCompanion toCompanion(bool nullToAbsent) {
     return UnparsedMessagesCompanion(
       id: Value(id),
+      smsMessageId: smsMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(smsMessageId),
       sender: Value(sender),
       body: Value(body),
       receivedAt: Value(receivedAt),
@@ -1177,6 +1367,7 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return UnparsedMessage(
       id: serializer.fromJson<int>(json['id']),
+      smsMessageId: serializer.fromJson<int?>(json['smsMessageId']),
       sender: serializer.fromJson<String>(json['sender']),
       body: serializer.fromJson<String>(json['body']),
       receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
@@ -1188,6 +1379,7 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
+      'smsMessageId': serializer.toJson<int?>(smsMessageId),
       'sender': serializer.toJson<String>(sender),
       'body': serializer.toJson<String>(body),
       'receivedAt': serializer.toJson<DateTime>(receivedAt),
@@ -1197,12 +1389,15 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
 
   UnparsedMessage copyWith(
           {int? id,
+          Value<int?> smsMessageId = const Value.absent(),
           String? sender,
           String? body,
           DateTime? receivedAt,
           bool? resolved}) =>
       UnparsedMessage(
         id: id ?? this.id,
+        smsMessageId:
+            smsMessageId.present ? smsMessageId.value : this.smsMessageId,
         sender: sender ?? this.sender,
         body: body ?? this.body,
         receivedAt: receivedAt ?? this.receivedAt,
@@ -1211,6 +1406,9 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   UnparsedMessage copyWithCompanion(UnparsedMessagesCompanion data) {
     return UnparsedMessage(
       id: data.id.present ? data.id.value : this.id,
+      smsMessageId: data.smsMessageId.present
+          ? data.smsMessageId.value
+          : this.smsMessageId,
       sender: data.sender.present ? data.sender.value : this.sender,
       body: data.body.present ? data.body.value : this.body,
       receivedAt:
@@ -1223,6 +1421,7 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   String toString() {
     return (StringBuffer('UnparsedMessage(')
           ..write('id: $id, ')
+          ..write('smsMessageId: $smsMessageId, ')
           ..write('sender: $sender, ')
           ..write('body: $body, ')
           ..write('receivedAt: $receivedAt, ')
@@ -1232,12 +1431,14 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
   }
 
   @override
-  int get hashCode => Object.hash(id, sender, body, receivedAt, resolved);
+  int get hashCode =>
+      Object.hash(id, smsMessageId, sender, body, receivedAt, resolved);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is UnparsedMessage &&
           other.id == this.id &&
+          other.smsMessageId == this.smsMessageId &&
           other.sender == this.sender &&
           other.body == this.body &&
           other.receivedAt == this.receivedAt &&
@@ -1246,12 +1447,14 @@ class UnparsedMessage extends DataClass implements Insertable<UnparsedMessage> {
 
 class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
   final Value<int> id;
+  final Value<int?> smsMessageId;
   final Value<String> sender;
   final Value<String> body;
   final Value<DateTime> receivedAt;
   final Value<bool> resolved;
   const UnparsedMessagesCompanion({
     this.id = const Value.absent(),
+    this.smsMessageId = const Value.absent(),
     this.sender = const Value.absent(),
     this.body = const Value.absent(),
     this.receivedAt = const Value.absent(),
@@ -1259,6 +1462,7 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
   });
   UnparsedMessagesCompanion.insert({
     this.id = const Value.absent(),
+    this.smsMessageId = const Value.absent(),
     required String sender,
     required String body,
     required DateTime receivedAt,
@@ -1268,6 +1472,7 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
         receivedAt = Value(receivedAt);
   static Insertable<UnparsedMessage> custom({
     Expression<int>? id,
+    Expression<int>? smsMessageId,
     Expression<String>? sender,
     Expression<String>? body,
     Expression<DateTime>? receivedAt,
@@ -1275,6 +1480,7 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (smsMessageId != null) 'sms_message_id': smsMessageId,
       if (sender != null) 'sender': sender,
       if (body != null) 'body': body,
       if (receivedAt != null) 'received_at': receivedAt,
@@ -1284,12 +1490,14 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
 
   UnparsedMessagesCompanion copyWith(
       {Value<int>? id,
+      Value<int?>? smsMessageId,
       Value<String>? sender,
       Value<String>? body,
       Value<DateTime>? receivedAt,
       Value<bool>? resolved}) {
     return UnparsedMessagesCompanion(
       id: id ?? this.id,
+      smsMessageId: smsMessageId ?? this.smsMessageId,
       sender: sender ?? this.sender,
       body: body ?? this.body,
       receivedAt: receivedAt ?? this.receivedAt,
@@ -1302,6 +1510,9 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<int>(id.value);
+    }
+    if (smsMessageId.present) {
+      map['sms_message_id'] = Variable<int>(smsMessageId.value);
     }
     if (sender.present) {
       map['sender'] = Variable<String>(sender.value);
@@ -1322,10 +1533,1860 @@ class UnparsedMessagesCompanion extends UpdateCompanion<UnparsedMessage> {
   String toString() {
     return (StringBuffer('UnparsedMessagesCompanion(')
           ..write('id: $id, ')
+          ..write('smsMessageId: $smsMessageId, ')
           ..write('sender: $sender, ')
           ..write('body: $body, ')
           ..write('receivedAt: $receivedAt, ')
           ..write('resolved: $resolved')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $FinancialProvidersTable extends FinancialProviders
+    with TableInfo<$FinancialProvidersTable, FinancialProvider> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FinancialProvidersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _codeMeta = const VerificationMeta('code');
+  @override
+  late final GeneratedColumn<String> code = GeneratedColumn<String>(
+      'code', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 32),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _displayNameMeta =
+      const VerificationMeta('displayName');
+  @override
+  late final GeneratedColumn<String> displayName = GeneratedColumn<String>(
+      'display_name', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 64),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _categoryMeta =
+      const VerificationMeta('category');
+  @override
+  late final GeneratedColumn<String> category = GeneratedColumn<String>(
+      'category', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 32),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [id, code, displayName, category];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'financial_providers';
+  @override
+  VerificationContext validateIntegrity(Insertable<FinancialProvider> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('code')) {
+      context.handle(
+          _codeMeta, code.isAcceptableOrUnknown(data['code']!, _codeMeta));
+    } else if (isInserting) {
+      context.missing(_codeMeta);
+    }
+    if (data.containsKey('display_name')) {
+      context.handle(
+          _displayNameMeta,
+          displayName.isAcceptableOrUnknown(
+              data['display_name']!, _displayNameMeta));
+    } else if (isInserting) {
+      context.missing(_displayNameMeta);
+    }
+    if (data.containsKey('category')) {
+      context.handle(_categoryMeta,
+          category.isAcceptableOrUnknown(data['category']!, _categoryMeta));
+    } else if (isInserting) {
+      context.missing(_categoryMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {code},
+      ];
+  @override
+  FinancialProvider map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FinancialProvider(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      code: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}code'])!,
+      displayName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}display_name'])!,
+      category: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}category'])!,
+    );
+  }
+
+  @override
+  $FinancialProvidersTable createAlias(String alias) {
+    return $FinancialProvidersTable(attachedDatabase, alias);
+  }
+}
+
+class FinancialProvider extends DataClass
+    implements Insertable<FinancialProvider> {
+  final int id;
+
+  /// Stable machine identifier, e.g. "mtn_momo_rw". Referenced by
+  /// [Transactions.providerId] and by parser/detector code — never
+  /// shown to the user directly.
+  final String code;
+
+  /// Human-readable name for UI, e.g. "MTN Mobile Money".
+  final String displayName;
+
+  /// "mobile_money" or "bank" — coarse grouping for the provider-picker
+  /// UI (spec Phase 6) and for deciding which parser family applies.
+  final String category;
+  const FinancialProvider(
+      {required this.id,
+      required this.code,
+      required this.displayName,
+      required this.category});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['code'] = Variable<String>(code);
+    map['display_name'] = Variable<String>(displayName);
+    map['category'] = Variable<String>(category);
+    return map;
+  }
+
+  FinancialProvidersCompanion toCompanion(bool nullToAbsent) {
+    return FinancialProvidersCompanion(
+      id: Value(id),
+      code: Value(code),
+      displayName: Value(displayName),
+      category: Value(category),
+    );
+  }
+
+  factory FinancialProvider.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FinancialProvider(
+      id: serializer.fromJson<int>(json['id']),
+      code: serializer.fromJson<String>(json['code']),
+      displayName: serializer.fromJson<String>(json['displayName']),
+      category: serializer.fromJson<String>(json['category']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'code': serializer.toJson<String>(code),
+      'displayName': serializer.toJson<String>(displayName),
+      'category': serializer.toJson<String>(category),
+    };
+  }
+
+  FinancialProvider copyWith(
+          {int? id, String? code, String? displayName, String? category}) =>
+      FinancialProvider(
+        id: id ?? this.id,
+        code: code ?? this.code,
+        displayName: displayName ?? this.displayName,
+        category: category ?? this.category,
+      );
+  FinancialProvider copyWithCompanion(FinancialProvidersCompanion data) {
+    return FinancialProvider(
+      id: data.id.present ? data.id.value : this.id,
+      code: data.code.present ? data.code.value : this.code,
+      displayName:
+          data.displayName.present ? data.displayName.value : this.displayName,
+      category: data.category.present ? data.category.value : this.category,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FinancialProvider(')
+          ..write('id: $id, ')
+          ..write('code: $code, ')
+          ..write('displayName: $displayName, ')
+          ..write('category: $category')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, code, displayName, category);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FinancialProvider &&
+          other.id == this.id &&
+          other.code == this.code &&
+          other.displayName == this.displayName &&
+          other.category == this.category);
+}
+
+class FinancialProvidersCompanion extends UpdateCompanion<FinancialProvider> {
+  final Value<int> id;
+  final Value<String> code;
+  final Value<String> displayName;
+  final Value<String> category;
+  const FinancialProvidersCompanion({
+    this.id = const Value.absent(),
+    this.code = const Value.absent(),
+    this.displayName = const Value.absent(),
+    this.category = const Value.absent(),
+  });
+  FinancialProvidersCompanion.insert({
+    this.id = const Value.absent(),
+    required String code,
+    required String displayName,
+    required String category,
+  })  : code = Value(code),
+        displayName = Value(displayName),
+        category = Value(category);
+  static Insertable<FinancialProvider> custom({
+    Expression<int>? id,
+    Expression<String>? code,
+    Expression<String>? displayName,
+    Expression<String>? category,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (code != null) 'code': code,
+      if (displayName != null) 'display_name': displayName,
+      if (category != null) 'category': category,
+    });
+  }
+
+  FinancialProvidersCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? code,
+      Value<String>? displayName,
+      Value<String>? category}) {
+    return FinancialProvidersCompanion(
+      id: id ?? this.id,
+      code: code ?? this.code,
+      displayName: displayName ?? this.displayName,
+      category: category ?? this.category,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (code.present) {
+      map['code'] = Variable<String>(code.value);
+    }
+    if (displayName.present) {
+      map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (category.present) {
+      map['category'] = Variable<String>(category.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FinancialProvidersCompanion(')
+          ..write('id: $id, ')
+          ..write('code: $code, ')
+          ..write('displayName: $displayName, ')
+          ..write('category: $category')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ProviderSendersTable extends ProviderSenders
+    with TableInfo<$ProviderSendersTable, ProviderSender> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ProviderSendersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _senderPatternMeta =
+      const VerificationMeta('senderPattern');
+  @override
+  late final GeneratedColumn<String> senderPattern = GeneratedColumn<String>(
+      'sender_pattern', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 64),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _providerIdMeta =
+      const VerificationMeta('providerId');
+  @override
+  late final GeneratedColumn<int> providerId = GeneratedColumn<int>(
+      'provider_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [id, senderPattern, providerId];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'provider_senders';
+  @override
+  VerificationContext validateIntegrity(Insertable<ProviderSender> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('sender_pattern')) {
+      context.handle(
+          _senderPatternMeta,
+          senderPattern.isAcceptableOrUnknown(
+              data['sender_pattern']!, _senderPatternMeta));
+    } else if (isInserting) {
+      context.missing(_senderPatternMeta);
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+          _providerIdMeta,
+          providerId.isAcceptableOrUnknown(
+              data['provider_id']!, _providerIdMeta));
+    } else if (isInserting) {
+      context.missing(_providerIdMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {senderPattern, providerId},
+      ];
+  @override
+  ProviderSender map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ProviderSender(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      senderPattern: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender_pattern'])!,
+      providerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}provider_id'])!,
+    );
+  }
+
+  @override
+  $ProviderSendersTable createAlias(String alias) {
+    return $ProviderSendersTable(attachedDatabase, alias);
+  }
+}
+
+class ProviderSender extends DataClass implements Insertable<ProviderSender> {
+  final int id;
+  final String senderPattern;
+  final int providerId;
+  const ProviderSender(
+      {required this.id,
+      required this.senderPattern,
+      required this.providerId});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['sender_pattern'] = Variable<String>(senderPattern);
+    map['provider_id'] = Variable<int>(providerId);
+    return map;
+  }
+
+  ProviderSendersCompanion toCompanion(bool nullToAbsent) {
+    return ProviderSendersCompanion(
+      id: Value(id),
+      senderPattern: Value(senderPattern),
+      providerId: Value(providerId),
+    );
+  }
+
+  factory ProviderSender.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ProviderSender(
+      id: serializer.fromJson<int>(json['id']),
+      senderPattern: serializer.fromJson<String>(json['senderPattern']),
+      providerId: serializer.fromJson<int>(json['providerId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'senderPattern': serializer.toJson<String>(senderPattern),
+      'providerId': serializer.toJson<int>(providerId),
+    };
+  }
+
+  ProviderSender copyWith({int? id, String? senderPattern, int? providerId}) =>
+      ProviderSender(
+        id: id ?? this.id,
+        senderPattern: senderPattern ?? this.senderPattern,
+        providerId: providerId ?? this.providerId,
+      );
+  ProviderSender copyWithCompanion(ProviderSendersCompanion data) {
+    return ProviderSender(
+      id: data.id.present ? data.id.value : this.id,
+      senderPattern: data.senderPattern.present
+          ? data.senderPattern.value
+          : this.senderPattern,
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ProviderSender(')
+          ..write('id: $id, ')
+          ..write('senderPattern: $senderPattern, ')
+          ..write('providerId: $providerId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, senderPattern, providerId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ProviderSender &&
+          other.id == this.id &&
+          other.senderPattern == this.senderPattern &&
+          other.providerId == this.providerId);
+}
+
+class ProviderSendersCompanion extends UpdateCompanion<ProviderSender> {
+  final Value<int> id;
+  final Value<String> senderPattern;
+  final Value<int> providerId;
+  const ProviderSendersCompanion({
+    this.id = const Value.absent(),
+    this.senderPattern = const Value.absent(),
+    this.providerId = const Value.absent(),
+  });
+  ProviderSendersCompanion.insert({
+    this.id = const Value.absent(),
+    required String senderPattern,
+    required int providerId,
+  })  : senderPattern = Value(senderPattern),
+        providerId = Value(providerId);
+  static Insertable<ProviderSender> custom({
+    Expression<int>? id,
+    Expression<String>? senderPattern,
+    Expression<int>? providerId,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (senderPattern != null) 'sender_pattern': senderPattern,
+      if (providerId != null) 'provider_id': providerId,
+    });
+  }
+
+  ProviderSendersCompanion copyWith(
+      {Value<int>? id, Value<String>? senderPattern, Value<int>? providerId}) {
+    return ProviderSendersCompanion(
+      id: id ?? this.id,
+      senderPattern: senderPattern ?? this.senderPattern,
+      providerId: providerId ?? this.providerId,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (senderPattern.present) {
+      map['sender_pattern'] = Variable<String>(senderPattern.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<int>(providerId.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ProviderSendersCompanion(')
+          ..write('id: $id, ')
+          ..write('senderPattern: $senderPattern, ')
+          ..write('providerId: $providerId')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SmsMessagesTable extends SmsMessages
+    with TableInfo<$SmsMessagesTable, SmsMessage> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SmsMessagesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _senderMeta = const VerificationMeta('sender');
+  @override
+  late final GeneratedColumn<String> sender = GeneratedColumn<String>(
+      'sender', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+      'body', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _receivedAtMeta =
+      const VerificationMeta('receivedAt');
+  @override
+  late final GeneratedColumn<DateTime> receivedAt = GeneratedColumn<DateTime>(
+      'received_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _smsHashMeta =
+      const VerificationMeta('smsHash');
+  @override
+  late final GeneratedColumn<String> smsHash = GeneratedColumn<String>(
+      'sms_hash', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 64, maxTextLength: 64),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _providerIdMeta =
+      const VerificationMeta('providerId');
+  @override
+  late final GeneratedColumn<int> providerId = GeneratedColumn<int>(
+      'provider_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  @override
+  late final GeneratedColumnWithTypeConverter<SmsProcessingStatus, String>
+      processingStatus = GeneratedColumn<String>(
+              'processing_status', aliasedName, false,
+              type: DriftSqlType.string,
+              requiredDuringInsert: false,
+              defaultValue: Constant(SmsProcessingStatus.pending.name))
+          .withConverter<SmsProcessingStatus>(
+              $SmsMessagesTable.$converterprocessingStatus);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        sender,
+        body,
+        receivedAt,
+        smsHash,
+        providerId,
+        processingStatus,
+        createdAt
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sms_messages';
+  @override
+  VerificationContext validateIntegrity(Insertable<SmsMessage> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('sender')) {
+      context.handle(_senderMeta,
+          sender.isAcceptableOrUnknown(data['sender']!, _senderMeta));
+    } else if (isInserting) {
+      context.missing(_senderMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+          _bodyMeta, body.isAcceptableOrUnknown(data['body']!, _bodyMeta));
+    } else if (isInserting) {
+      context.missing(_bodyMeta);
+    }
+    if (data.containsKey('received_at')) {
+      context.handle(
+          _receivedAtMeta,
+          receivedAt.isAcceptableOrUnknown(
+              data['received_at']!, _receivedAtMeta));
+    } else if (isInserting) {
+      context.missing(_receivedAtMeta);
+    }
+    if (data.containsKey('sms_hash')) {
+      context.handle(_smsHashMeta,
+          smsHash.isAcceptableOrUnknown(data['sms_hash']!, _smsHashMeta));
+    } else if (isInserting) {
+      context.missing(_smsHashMeta);
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+          _providerIdMeta,
+          providerId.isAcceptableOrUnknown(
+              data['provider_id']!, _providerIdMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {smsHash},
+      ];
+  @override
+  SmsMessage map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SmsMessage(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      sender: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender'])!,
+      body: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}body'])!,
+      receivedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}received_at'])!,
+      smsHash: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sms_hash'])!,
+      providerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}provider_id']),
+      processingStatus: $SmsMessagesTable.$converterprocessingStatus.fromSql(
+          attachedDatabase.typeMapping.read(DriftSqlType.string,
+              data['${effectivePrefix}processing_status'])!),
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $SmsMessagesTable createAlias(String alias) {
+    return $SmsMessagesTable(attachedDatabase, alias);
+  }
+
+  static JsonTypeConverter2<SmsProcessingStatus, String, String>
+      $converterprocessingStatus =
+      const EnumNameConverter<SmsProcessingStatus>(SmsProcessingStatus.values);
+}
+
+class SmsMessage extends DataClass implements Insertable<SmsMessage> {
+  final int id;
+  final String sender;
+  final String body;
+  final DateTime receivedAt;
+
+  /// SHA-256 of `sender|body|receivedAt.millisecondsSinceEpoch`, computed
+  /// at insert time (see [AppDatabase.hashSmsMessage]). This is the
+  /// dedup key: re-running a historical scan (a known v1 gap — see
+  /// docs/AUDIT_PHASE_0.md §3.5) hits the unique constraint below and is
+  /// silently skipped instead of double-inserting.
+  final String smsHash;
+
+  /// Nullable: set once a provider is identified for this message.
+  /// Null means either not yet processed, or processed but no known
+  /// provider matched the sender at all (a step before "parsed the
+  /// body" — see ProviderDetector).
+  final int? providerId;
+  final SmsProcessingStatus processingStatus;
+  final DateTime createdAt;
+  const SmsMessage(
+      {required this.id,
+      required this.sender,
+      required this.body,
+      required this.receivedAt,
+      required this.smsHash,
+      this.providerId,
+      required this.processingStatus,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['sender'] = Variable<String>(sender);
+    map['body'] = Variable<String>(body);
+    map['received_at'] = Variable<DateTime>(receivedAt);
+    map['sms_hash'] = Variable<String>(smsHash);
+    if (!nullToAbsent || providerId != null) {
+      map['provider_id'] = Variable<int>(providerId);
+    }
+    {
+      map['processing_status'] = Variable<String>(
+          $SmsMessagesTable.$converterprocessingStatus.toSql(processingStatus));
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  SmsMessagesCompanion toCompanion(bool nullToAbsent) {
+    return SmsMessagesCompanion(
+      id: Value(id),
+      sender: Value(sender),
+      body: Value(body),
+      receivedAt: Value(receivedAt),
+      smsHash: Value(smsHash),
+      providerId: providerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(providerId),
+      processingStatus: Value(processingStatus),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory SmsMessage.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SmsMessage(
+      id: serializer.fromJson<int>(json['id']),
+      sender: serializer.fromJson<String>(json['sender']),
+      body: serializer.fromJson<String>(json['body']),
+      receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
+      smsHash: serializer.fromJson<String>(json['smsHash']),
+      providerId: serializer.fromJson<int?>(json['providerId']),
+      processingStatus: $SmsMessagesTable.$converterprocessingStatus
+          .fromJson(serializer.fromJson<String>(json['processingStatus'])),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'sender': serializer.toJson<String>(sender),
+      'body': serializer.toJson<String>(body),
+      'receivedAt': serializer.toJson<DateTime>(receivedAt),
+      'smsHash': serializer.toJson<String>(smsHash),
+      'providerId': serializer.toJson<int?>(providerId),
+      'processingStatus': serializer.toJson<String>($SmsMessagesTable
+          .$converterprocessingStatus
+          .toJson(processingStatus)),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  SmsMessage copyWith(
+          {int? id,
+          String? sender,
+          String? body,
+          DateTime? receivedAt,
+          String? smsHash,
+          Value<int?> providerId = const Value.absent(),
+          SmsProcessingStatus? processingStatus,
+          DateTime? createdAt}) =>
+      SmsMessage(
+        id: id ?? this.id,
+        sender: sender ?? this.sender,
+        body: body ?? this.body,
+        receivedAt: receivedAt ?? this.receivedAt,
+        smsHash: smsHash ?? this.smsHash,
+        providerId: providerId.present ? providerId.value : this.providerId,
+        processingStatus: processingStatus ?? this.processingStatus,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  SmsMessage copyWithCompanion(SmsMessagesCompanion data) {
+    return SmsMessage(
+      id: data.id.present ? data.id.value : this.id,
+      sender: data.sender.present ? data.sender.value : this.sender,
+      body: data.body.present ? data.body.value : this.body,
+      receivedAt:
+          data.receivedAt.present ? data.receivedAt.value : this.receivedAt,
+      smsHash: data.smsHash.present ? data.smsHash.value : this.smsHash,
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+      processingStatus: data.processingStatus.present
+          ? data.processingStatus.value
+          : this.processingStatus,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SmsMessage(')
+          ..write('id: $id, ')
+          ..write('sender: $sender, ')
+          ..write('body: $body, ')
+          ..write('receivedAt: $receivedAt, ')
+          ..write('smsHash: $smsHash, ')
+          ..write('providerId: $providerId, ')
+          ..write('processingStatus: $processingStatus, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, sender, body, receivedAt, smsHash,
+      providerId, processingStatus, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SmsMessage &&
+          other.id == this.id &&
+          other.sender == this.sender &&
+          other.body == this.body &&
+          other.receivedAt == this.receivedAt &&
+          other.smsHash == this.smsHash &&
+          other.providerId == this.providerId &&
+          other.processingStatus == this.processingStatus &&
+          other.createdAt == this.createdAt);
+}
+
+class SmsMessagesCompanion extends UpdateCompanion<SmsMessage> {
+  final Value<int> id;
+  final Value<String> sender;
+  final Value<String> body;
+  final Value<DateTime> receivedAt;
+  final Value<String> smsHash;
+  final Value<int?> providerId;
+  final Value<SmsProcessingStatus> processingStatus;
+  final Value<DateTime> createdAt;
+  const SmsMessagesCompanion({
+    this.id = const Value.absent(),
+    this.sender = const Value.absent(),
+    this.body = const Value.absent(),
+    this.receivedAt = const Value.absent(),
+    this.smsHash = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.processingStatus = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  SmsMessagesCompanion.insert({
+    this.id = const Value.absent(),
+    required String sender,
+    required String body,
+    required DateTime receivedAt,
+    required String smsHash,
+    this.providerId = const Value.absent(),
+    this.processingStatus = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  })  : sender = Value(sender),
+        body = Value(body),
+        receivedAt = Value(receivedAt),
+        smsHash = Value(smsHash);
+  static Insertable<SmsMessage> custom({
+    Expression<int>? id,
+    Expression<String>? sender,
+    Expression<String>? body,
+    Expression<DateTime>? receivedAt,
+    Expression<String>? smsHash,
+    Expression<int>? providerId,
+    Expression<String>? processingStatus,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (sender != null) 'sender': sender,
+      if (body != null) 'body': body,
+      if (receivedAt != null) 'received_at': receivedAt,
+      if (smsHash != null) 'sms_hash': smsHash,
+      if (providerId != null) 'provider_id': providerId,
+      if (processingStatus != null) 'processing_status': processingStatus,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  SmsMessagesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? sender,
+      Value<String>? body,
+      Value<DateTime>? receivedAt,
+      Value<String>? smsHash,
+      Value<int?>? providerId,
+      Value<SmsProcessingStatus>? processingStatus,
+      Value<DateTime>? createdAt}) {
+    return SmsMessagesCompanion(
+      id: id ?? this.id,
+      sender: sender ?? this.sender,
+      body: body ?? this.body,
+      receivedAt: receivedAt ?? this.receivedAt,
+      smsHash: smsHash ?? this.smsHash,
+      providerId: providerId ?? this.providerId,
+      processingStatus: processingStatus ?? this.processingStatus,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (sender.present) {
+      map['sender'] = Variable<String>(sender.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (receivedAt.present) {
+      map['received_at'] = Variable<DateTime>(receivedAt.value);
+    }
+    if (smsHash.present) {
+      map['sms_hash'] = Variable<String>(smsHash.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<int>(providerId.value);
+    }
+    if (processingStatus.present) {
+      map['processing_status'] = Variable<String>($SmsMessagesTable
+          .$converterprocessingStatus
+          .toSql(processingStatus.value));
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SmsMessagesCompanion(')
+          ..write('id: $id, ')
+          ..write('sender: $sender, ')
+          ..write('body: $body, ')
+          ..write('receivedAt: $receivedAt, ')
+          ..write('smsHash: $smsHash, ')
+          ..write('providerId: $providerId, ')
+          ..write('processingStatus: $processingStatus, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AccountsTable extends Accounts with TableInfo<$AccountsTable, Account> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AccountsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _providerIdMeta =
+      const VerificationMeta('providerId');
+  @override
+  late final GeneratedColumn<int> providerId = GeneratedColumn<int>(
+      'provider_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _labelMeta = const VerificationMeta('label');
+  @override
+  late final GeneratedColumn<String> label = GeneratedColumn<String>(
+      'label', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 64),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [id, providerId, label];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'accounts';
+  @override
+  VerificationContext validateIntegrity(Insertable<Account> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+          _providerIdMeta,
+          providerId.isAcceptableOrUnknown(
+              data['provider_id']!, _providerIdMeta));
+    } else if (isInserting) {
+      context.missing(_providerIdMeta);
+    }
+    if (data.containsKey('label')) {
+      context.handle(
+          _labelMeta, label.isAcceptableOrUnknown(data['label']!, _labelMeta));
+    } else if (isInserting) {
+      context.missing(_labelMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Account map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Account(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      providerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}provider_id'])!,
+      label: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}label'])!,
+    );
+  }
+
+  @override
+  $AccountsTable createAlias(String alias) {
+    return $AccountsTable(attachedDatabase, alias);
+  }
+}
+
+class Account extends DataClass implements Insertable<Account> {
+  final int id;
+  final int providerId;
+
+  /// User-facing label, e.g. "My MTN MoMo". Defaults to the provider's
+  /// own display name at creation time but is independently editable
+  /// (spec Phase 7's account list implies users may rename accounts).
+  final String label;
+  const Account(
+      {required this.id, required this.providerId, required this.label});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['provider_id'] = Variable<int>(providerId);
+    map['label'] = Variable<String>(label);
+    return map;
+  }
+
+  AccountsCompanion toCompanion(bool nullToAbsent) {
+    return AccountsCompanion(
+      id: Value(id),
+      providerId: Value(providerId),
+      label: Value(label),
+    );
+  }
+
+  factory Account.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Account(
+      id: serializer.fromJson<int>(json['id']),
+      providerId: serializer.fromJson<int>(json['providerId']),
+      label: serializer.fromJson<String>(json['label']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'providerId': serializer.toJson<int>(providerId),
+      'label': serializer.toJson<String>(label),
+    };
+  }
+
+  Account copyWith({int? id, int? providerId, String? label}) => Account(
+        id: id ?? this.id,
+        providerId: providerId ?? this.providerId,
+        label: label ?? this.label,
+      );
+  Account copyWithCompanion(AccountsCompanion data) {
+    return Account(
+      id: data.id.present ? data.id.value : this.id,
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+      label: data.label.present ? data.label.value : this.label,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Account(')
+          ..write('id: $id, ')
+          ..write('providerId: $providerId, ')
+          ..write('label: $label')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, providerId, label);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Account &&
+          other.id == this.id &&
+          other.providerId == this.providerId &&
+          other.label == this.label);
+}
+
+class AccountsCompanion extends UpdateCompanion<Account> {
+  final Value<int> id;
+  final Value<int> providerId;
+  final Value<String> label;
+  const AccountsCompanion({
+    this.id = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.label = const Value.absent(),
+  });
+  AccountsCompanion.insert({
+    this.id = const Value.absent(),
+    required int providerId,
+    required String label,
+  })  : providerId = Value(providerId),
+        label = Value(label);
+  static Insertable<Account> custom({
+    Expression<int>? id,
+    Expression<int>? providerId,
+    Expression<String>? label,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (providerId != null) 'provider_id': providerId,
+      if (label != null) 'label': label,
+    });
+  }
+
+  AccountsCompanion copyWith(
+      {Value<int>? id, Value<int>? providerId, Value<String>? label}) {
+    return AccountsCompanion(
+      id: id ?? this.id,
+      providerId: providerId ?? this.providerId,
+      label: label ?? this.label,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<int>(providerId.value);
+    }
+    if (label.present) {
+      map['label'] = Variable<String>(label.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AccountsCompanion(')
+          ..write('id: $id, ')
+          ..write('providerId: $providerId, ')
+          ..write('label: $label')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $MerchantsTable extends Merchants
+    with TableInfo<$MerchantsTable, Merchant> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MerchantsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 128),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _normalizedNameMeta =
+      const VerificationMeta('normalizedName');
+  @override
+  late final GeneratedColumn<String> normalizedName = GeneratedColumn<String>(
+      'normalized_name', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 128),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _categoryIdMeta =
+      const VerificationMeta('categoryId');
+  @override
+  late final GeneratedColumn<int> categoryId = GeneratedColumn<int>(
+      'category_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [id, name, normalizedName, categoryId];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'merchants';
+  @override
+  VerificationContext validateIntegrity(Insertable<Merchant> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('normalized_name')) {
+      context.handle(
+          _normalizedNameMeta,
+          normalizedName.isAcceptableOrUnknown(
+              data['normalized_name']!, _normalizedNameMeta));
+    } else if (isInserting) {
+      context.missing(_normalizedNameMeta);
+    }
+    if (data.containsKey('category_id')) {
+      context.handle(
+          _categoryIdMeta,
+          categoryId.isAcceptableOrUnknown(
+              data['category_id']!, _categoryIdMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {normalizedName},
+      ];
+  @override
+  Merchant map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Merchant(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      normalizedName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}normalized_name'])!,
+      categoryId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}category_id']),
+    );
+  }
+
+  @override
+  $MerchantsTable createAlias(String alias) {
+    return $MerchantsTable(attachedDatabase, alias);
+  }
+}
+
+class Merchant extends DataClass implements Insertable<Merchant> {
+  final int id;
+
+  /// The merchant name as extracted from the SMS, with the trailing
+  /// account/till code stripped — e.g. "THE FAMILYS BAKERY LTD" from
+  /// "THE FAMILYS BAKERY LTD 096957". See
+  /// `MerchantNormalizationService.extractMerchantName`.
+  final String name;
+
+  /// Uppercased, punctuation-stripped, whitespace-collapsed form of
+  /// [name] — the actual matching key, so "Family Bakery Ltd" and
+  /// "FAMILY BAKERY LTD." (different real messages, same real business)
+  /// resolve to the same merchant instead of creating two rows.
+  final String normalizedName;
+  final int? categoryId;
+  const Merchant(
+      {required this.id,
+      required this.name,
+      required this.normalizedName,
+      this.categoryId});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['name'] = Variable<String>(name);
+    map['normalized_name'] = Variable<String>(normalizedName);
+    if (!nullToAbsent || categoryId != null) {
+      map['category_id'] = Variable<int>(categoryId);
+    }
+    return map;
+  }
+
+  MerchantsCompanion toCompanion(bool nullToAbsent) {
+    return MerchantsCompanion(
+      id: Value(id),
+      name: Value(name),
+      normalizedName: Value(normalizedName),
+      categoryId: categoryId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(categoryId),
+    );
+  }
+
+  factory Merchant.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Merchant(
+      id: serializer.fromJson<int>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      normalizedName: serializer.fromJson<String>(json['normalizedName']),
+      categoryId: serializer.fromJson<int?>(json['categoryId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'name': serializer.toJson<String>(name),
+      'normalizedName': serializer.toJson<String>(normalizedName),
+      'categoryId': serializer.toJson<int?>(categoryId),
+    };
+  }
+
+  Merchant copyWith(
+          {int? id,
+          String? name,
+          String? normalizedName,
+          Value<int?> categoryId = const Value.absent()}) =>
+      Merchant(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        normalizedName: normalizedName ?? this.normalizedName,
+        categoryId: categoryId.present ? categoryId.value : this.categoryId,
+      );
+  Merchant copyWithCompanion(MerchantsCompanion data) {
+    return Merchant(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      normalizedName: data.normalizedName.present
+          ? data.normalizedName.value
+          : this.normalizedName,
+      categoryId:
+          data.categoryId.present ? data.categoryId.value : this.categoryId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Merchant(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('normalizedName: $normalizedName, ')
+          ..write('categoryId: $categoryId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, name, normalizedName, categoryId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Merchant &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.normalizedName == this.normalizedName &&
+          other.categoryId == this.categoryId);
+}
+
+class MerchantsCompanion extends UpdateCompanion<Merchant> {
+  final Value<int> id;
+  final Value<String> name;
+  final Value<String> normalizedName;
+  final Value<int?> categoryId;
+  const MerchantsCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.normalizedName = const Value.absent(),
+    this.categoryId = const Value.absent(),
+  });
+  MerchantsCompanion.insert({
+    this.id = const Value.absent(),
+    required String name,
+    required String normalizedName,
+    this.categoryId = const Value.absent(),
+  })  : name = Value(name),
+        normalizedName = Value(normalizedName);
+  static Insertable<Merchant> custom({
+    Expression<int>? id,
+    Expression<String>? name,
+    Expression<String>? normalizedName,
+    Expression<int>? categoryId,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (normalizedName != null) 'normalized_name': normalizedName,
+      if (categoryId != null) 'category_id': categoryId,
+    });
+  }
+
+  MerchantsCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? name,
+      Value<String>? normalizedName,
+      Value<int?>? categoryId}) {
+    return MerchantsCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      normalizedName: normalizedName ?? this.normalizedName,
+      categoryId: categoryId ?? this.categoryId,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (normalizedName.present) {
+      map['normalized_name'] = Variable<String>(normalizedName.value);
+    }
+    if (categoryId.present) {
+      map['category_id'] = Variable<int>(categoryId.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MerchantsCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('normalizedName: $normalizedName, ')
+          ..write('categoryId: $categoryId')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $TransferLinksTable extends TransferLinks
+    with TableInfo<$TransferLinksTable, TransferLink> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TransferLinksTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _fromTransactionIdMeta =
+      const VerificationMeta('fromTransactionId');
+  @override
+  late final GeneratedColumn<int> fromTransactionId = GeneratedColumn<int>(
+      'from_transaction_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _toTransactionIdMeta =
+      const VerificationMeta('toTransactionId');
+  @override
+  late final GeneratedColumn<int> toTransactionId = GeneratedColumn<int>(
+      'to_transaction_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  @override
+  late final GeneratedColumnWithTypeConverter<TransferMatchConfidence, String>
+      confidence = GeneratedColumn<String>('confidence', aliasedName, false,
+              type: DriftSqlType.string, requiredDuringInsert: true)
+          .withConverter<TransferMatchConfidence>(
+              $TransferLinksTable.$converterconfidence);
+  static const VerificationMeta _matchReasonMeta =
+      const VerificationMeta('matchReason');
+  @override
+  late final GeneratedColumn<String> matchReason = GeneratedColumn<String>(
+      'match_reason', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        fromTransactionId,
+        toTransactionId,
+        confidence,
+        matchReason,
+        createdAt
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'transfer_links';
+  @override
+  VerificationContext validateIntegrity(Insertable<TransferLink> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('from_transaction_id')) {
+      context.handle(
+          _fromTransactionIdMeta,
+          fromTransactionId.isAcceptableOrUnknown(
+              data['from_transaction_id']!, _fromTransactionIdMeta));
+    } else if (isInserting) {
+      context.missing(_fromTransactionIdMeta);
+    }
+    if (data.containsKey('to_transaction_id')) {
+      context.handle(
+          _toTransactionIdMeta,
+          toTransactionId.isAcceptableOrUnknown(
+              data['to_transaction_id']!, _toTransactionIdMeta));
+    } else if (isInserting) {
+      context.missing(_toTransactionIdMeta);
+    }
+    if (data.containsKey('match_reason')) {
+      context.handle(
+          _matchReasonMeta,
+          matchReason.isAcceptableOrUnknown(
+              data['match_reason']!, _matchReasonMeta));
+    } else if (isInserting) {
+      context.missing(_matchReasonMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {fromTransactionId, toTransactionId},
+      ];
+  @override
+  TransferLink map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TransferLink(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      fromTransactionId: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}from_transaction_id'])!,
+      toTransactionId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}to_transaction_id'])!,
+      confidence: $TransferLinksTable.$converterconfidence.fromSql(
+          attachedDatabase.typeMapping.read(
+              DriftSqlType.string, data['${effectivePrefix}confidence'])!),
+      matchReason: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}match_reason'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $TransferLinksTable createAlias(String alias) {
+    return $TransferLinksTable(attachedDatabase, alias);
+  }
+
+  static JsonTypeConverter2<TransferMatchConfidence, String, String>
+      $converterconfidence = const EnumNameConverter<TransferMatchConfidence>(
+          TransferMatchConfidence.values);
+}
+
+class TransferLink extends DataClass implements Insertable<TransferLink> {
+  final int id;
+  final int fromTransactionId;
+  final int toTransactionId;
+  final TransferMatchConfidence confidence;
+
+  /// Free-text note on *why* the engine matched these two, e.g. "matched
+  /// via shared reference 541077019015" or "matched via amount+time
+  /// proximity, no shared reference" — surfaced in a future "why is
+  /// this a transfer?" UI affordance rather than being a silent,
+  /// unexplainable link.
+  final String matchReason;
+  final DateTime createdAt;
+  const TransferLink(
+      {required this.id,
+      required this.fromTransactionId,
+      required this.toTransactionId,
+      required this.confidence,
+      required this.matchReason,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['from_transaction_id'] = Variable<int>(fromTransactionId);
+    map['to_transaction_id'] = Variable<int>(toTransactionId);
+    {
+      map['confidence'] = Variable<String>(
+          $TransferLinksTable.$converterconfidence.toSql(confidence));
+    }
+    map['match_reason'] = Variable<String>(matchReason);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  TransferLinksCompanion toCompanion(bool nullToAbsent) {
+    return TransferLinksCompanion(
+      id: Value(id),
+      fromTransactionId: Value(fromTransactionId),
+      toTransactionId: Value(toTransactionId),
+      confidence: Value(confidence),
+      matchReason: Value(matchReason),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory TransferLink.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TransferLink(
+      id: serializer.fromJson<int>(json['id']),
+      fromTransactionId: serializer.fromJson<int>(json['fromTransactionId']),
+      toTransactionId: serializer.fromJson<int>(json['toTransactionId']),
+      confidence: $TransferLinksTable.$converterconfidence
+          .fromJson(serializer.fromJson<String>(json['confidence'])),
+      matchReason: serializer.fromJson<String>(json['matchReason']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'fromTransactionId': serializer.toJson<int>(fromTransactionId),
+      'toTransactionId': serializer.toJson<int>(toTransactionId),
+      'confidence': serializer.toJson<String>(
+          $TransferLinksTable.$converterconfidence.toJson(confidence)),
+      'matchReason': serializer.toJson<String>(matchReason),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  TransferLink copyWith(
+          {int? id,
+          int? fromTransactionId,
+          int? toTransactionId,
+          TransferMatchConfidence? confidence,
+          String? matchReason,
+          DateTime? createdAt}) =>
+      TransferLink(
+        id: id ?? this.id,
+        fromTransactionId: fromTransactionId ?? this.fromTransactionId,
+        toTransactionId: toTransactionId ?? this.toTransactionId,
+        confidence: confidence ?? this.confidence,
+        matchReason: matchReason ?? this.matchReason,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  TransferLink copyWithCompanion(TransferLinksCompanion data) {
+    return TransferLink(
+      id: data.id.present ? data.id.value : this.id,
+      fromTransactionId: data.fromTransactionId.present
+          ? data.fromTransactionId.value
+          : this.fromTransactionId,
+      toTransactionId: data.toTransactionId.present
+          ? data.toTransactionId.value
+          : this.toTransactionId,
+      confidence:
+          data.confidence.present ? data.confidence.value : this.confidence,
+      matchReason:
+          data.matchReason.present ? data.matchReason.value : this.matchReason,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TransferLink(')
+          ..write('id: $id, ')
+          ..write('fromTransactionId: $fromTransactionId, ')
+          ..write('toTransactionId: $toTransactionId, ')
+          ..write('confidence: $confidence, ')
+          ..write('matchReason: $matchReason, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, fromTransactionId, toTransactionId,
+      confidence, matchReason, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TransferLink &&
+          other.id == this.id &&
+          other.fromTransactionId == this.fromTransactionId &&
+          other.toTransactionId == this.toTransactionId &&
+          other.confidence == this.confidence &&
+          other.matchReason == this.matchReason &&
+          other.createdAt == this.createdAt);
+}
+
+class TransferLinksCompanion extends UpdateCompanion<TransferLink> {
+  final Value<int> id;
+  final Value<int> fromTransactionId;
+  final Value<int> toTransactionId;
+  final Value<TransferMatchConfidence> confidence;
+  final Value<String> matchReason;
+  final Value<DateTime> createdAt;
+  const TransferLinksCompanion({
+    this.id = const Value.absent(),
+    this.fromTransactionId = const Value.absent(),
+    this.toTransactionId = const Value.absent(),
+    this.confidence = const Value.absent(),
+    this.matchReason = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  TransferLinksCompanion.insert({
+    this.id = const Value.absent(),
+    required int fromTransactionId,
+    required int toTransactionId,
+    required TransferMatchConfidence confidence,
+    required String matchReason,
+    this.createdAt = const Value.absent(),
+  })  : fromTransactionId = Value(fromTransactionId),
+        toTransactionId = Value(toTransactionId),
+        confidence = Value(confidence),
+        matchReason = Value(matchReason);
+  static Insertable<TransferLink> custom({
+    Expression<int>? id,
+    Expression<int>? fromTransactionId,
+    Expression<int>? toTransactionId,
+    Expression<String>? confidence,
+    Expression<String>? matchReason,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (fromTransactionId != null) 'from_transaction_id': fromTransactionId,
+      if (toTransactionId != null) 'to_transaction_id': toTransactionId,
+      if (confidence != null) 'confidence': confidence,
+      if (matchReason != null) 'match_reason': matchReason,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  TransferLinksCompanion copyWith(
+      {Value<int>? id,
+      Value<int>? fromTransactionId,
+      Value<int>? toTransactionId,
+      Value<TransferMatchConfidence>? confidence,
+      Value<String>? matchReason,
+      Value<DateTime>? createdAt}) {
+    return TransferLinksCompanion(
+      id: id ?? this.id,
+      fromTransactionId: fromTransactionId ?? this.fromTransactionId,
+      toTransactionId: toTransactionId ?? this.toTransactionId,
+      confidence: confidence ?? this.confidence,
+      matchReason: matchReason ?? this.matchReason,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (fromTransactionId.present) {
+      map['from_transaction_id'] = Variable<int>(fromTransactionId.value);
+    }
+    if (toTransactionId.present) {
+      map['to_transaction_id'] = Variable<int>(toTransactionId.value);
+    }
+    if (confidence.present) {
+      map['confidence'] = Variable<String>(
+          $TransferLinksTable.$converterconfidence.toSql(confidence.value));
+    }
+    if (matchReason.present) {
+      map['match_reason'] = Variable<String>(matchReason.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TransferLinksCompanion(')
+          ..write('id: $id, ')
+          ..write('fromTransactionId: $fromTransactionId, ')
+          ..write('toTransactionId: $toTransactionId, ')
+          ..write('confidence: $confidence, ')
+          ..write('matchReason: $matchReason, ')
+          ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
   }
@@ -1339,12 +3400,30 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $TransactionsTable transactions = $TransactionsTable(this);
   late final $UnparsedMessagesTable unparsedMessages =
       $UnparsedMessagesTable(this);
+  late final $FinancialProvidersTable financialProviders =
+      $FinancialProvidersTable(this);
+  late final $ProviderSendersTable providerSenders =
+      $ProviderSendersTable(this);
+  late final $SmsMessagesTable smsMessages = $SmsMessagesTable(this);
+  late final $AccountsTable accounts = $AccountsTable(this);
+  late final $MerchantsTable merchants = $MerchantsTable(this);
+  late final $TransferLinksTable transferLinks = $TransferLinksTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [categories, categoryCodes, transactions, unparsedMessages];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+        categories,
+        categoryCodes,
+        transactions,
+        unparsedMessages,
+        financialProviders,
+        providerSenders,
+        smsMessages,
+        accounts,
+        merchants,
+        transferLinks
+      ];
 }
 
 typedef $$CategoriesTableCreateCompanionBuilder = CategoriesCompanion Function({
@@ -1616,7 +3695,10 @@ typedef $$CategoryCodesTableProcessedTableManager = ProcessedTableManager<
 typedef $$TransactionsTableCreateCompanionBuilder = TransactionsCompanion
     Function({
   Value<int> id,
-  required String provider,
+  Value<int?> smsMessageId,
+  Value<int?> providerId,
+  Value<int?> accountId,
+  Value<int?> merchantId,
   required TransactionType type,
   required double amount,
   Value<double> fee,
@@ -1630,7 +3712,10 @@ typedef $$TransactionsTableCreateCompanionBuilder = TransactionsCompanion
 typedef $$TransactionsTableUpdateCompanionBuilder = TransactionsCompanion
     Function({
   Value<int> id,
-  Value<String> provider,
+  Value<int?> smsMessageId,
+  Value<int?> providerId,
+  Value<int?> accountId,
+  Value<int?> merchantId,
   Value<TransactionType> type,
   Value<double> amount,
   Value<double> fee,
@@ -1654,8 +3739,17 @@ class $$TransactionsTableFilterComposer
   ColumnFilters<int> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnFilters(column));
 
-  ColumnFilters<String> get provider => $composableBuilder(
-      column: $table.provider, builder: (column) => ColumnFilters(column));
+  ColumnFilters<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get accountId => $composableBuilder(
+      column: $table.accountId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get merchantId => $composableBuilder(
+      column: $table.merchantId, builder: (column) => ColumnFilters(column));
 
   ColumnWithTypeConverterFilters<TransactionType, TransactionType, String>
       get type => $composableBuilder(
@@ -1699,8 +3793,18 @@ class $$TransactionsTableOrderingComposer
   ColumnOrderings<int> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnOrderings(column));
 
-  ColumnOrderings<String> get provider => $composableBuilder(
-      column: $table.provider, builder: (column) => ColumnOrderings(column));
+  ColumnOrderings<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get accountId => $composableBuilder(
+      column: $table.accountId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get merchantId => $composableBuilder(
+      column: $table.merchantId, builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<String> get type => $composableBuilder(
       column: $table.type, builder: (column) => ColumnOrderings(column));
@@ -1744,8 +3848,17 @@ class $$TransactionsTableAnnotationComposer
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
 
-  GeneratedColumn<String> get provider =>
-      $composableBuilder(column: $table.provider, builder: (column) => column);
+  GeneratedColumn<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId, builder: (column) => column);
+
+  GeneratedColumn<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => column);
+
+  GeneratedColumn<int> get accountId =>
+      $composableBuilder(column: $table.accountId, builder: (column) => column);
+
+  GeneratedColumn<int> get merchantId => $composableBuilder(
+      column: $table.merchantId, builder: (column) => column);
 
   GeneratedColumnWithTypeConverter<TransactionType, String> get type =>
       $composableBuilder(column: $table.type, builder: (column) => column);
@@ -1802,7 +3915,10 @@ class $$TransactionsTableTableManager extends RootTableManager<
               $$TransactionsTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback: ({
             Value<int> id = const Value.absent(),
-            Value<String> provider = const Value.absent(),
+            Value<int?> smsMessageId = const Value.absent(),
+            Value<int?> providerId = const Value.absent(),
+            Value<int?> accountId = const Value.absent(),
+            Value<int?> merchantId = const Value.absent(),
             Value<TransactionType> type = const Value.absent(),
             Value<double> amount = const Value.absent(),
             Value<double> fee = const Value.absent(),
@@ -1815,7 +3931,10 @@ class $$TransactionsTableTableManager extends RootTableManager<
           }) =>
               TransactionsCompanion(
             id: id,
-            provider: provider,
+            smsMessageId: smsMessageId,
+            providerId: providerId,
+            accountId: accountId,
+            merchantId: merchantId,
             type: type,
             amount: amount,
             fee: fee,
@@ -1828,7 +3947,10 @@ class $$TransactionsTableTableManager extends RootTableManager<
           ),
           createCompanionCallback: ({
             Value<int> id = const Value.absent(),
-            required String provider,
+            Value<int?> smsMessageId = const Value.absent(),
+            Value<int?> providerId = const Value.absent(),
+            Value<int?> accountId = const Value.absent(),
+            Value<int?> merchantId = const Value.absent(),
             required TransactionType type,
             required double amount,
             Value<double> fee = const Value.absent(),
@@ -1841,7 +3963,10 @@ class $$TransactionsTableTableManager extends RootTableManager<
           }) =>
               TransactionsCompanion.insert(
             id: id,
-            provider: provider,
+            smsMessageId: smsMessageId,
+            providerId: providerId,
+            accountId: accountId,
+            merchantId: merchantId,
             type: type,
             amount: amount,
             fee: fee,
@@ -1877,6 +4002,7 @@ typedef $$TransactionsTableProcessedTableManager = ProcessedTableManager<
 typedef $$UnparsedMessagesTableCreateCompanionBuilder
     = UnparsedMessagesCompanion Function({
   Value<int> id,
+  Value<int?> smsMessageId,
   required String sender,
   required String body,
   required DateTime receivedAt,
@@ -1885,6 +4011,7 @@ typedef $$UnparsedMessagesTableCreateCompanionBuilder
 typedef $$UnparsedMessagesTableUpdateCompanionBuilder
     = UnparsedMessagesCompanion Function({
   Value<int> id,
+  Value<int?> smsMessageId,
   Value<String> sender,
   Value<String> body,
   Value<DateTime> receivedAt,
@@ -1902,6 +4029,9 @@ class $$UnparsedMessagesTableFilterComposer
   });
   ColumnFilters<int> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get sender => $composableBuilder(
       column: $table.sender, builder: (column) => ColumnFilters(column));
@@ -1928,6 +4058,10 @@ class $$UnparsedMessagesTableOrderingComposer
   ColumnOrderings<int> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get sender => $composableBuilder(
       column: $table.sender, builder: (column) => ColumnOrderings(column));
 
@@ -1952,6 +4086,9 @@ class $$UnparsedMessagesTableAnnotationComposer
   });
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get smsMessageId => $composableBuilder(
+      column: $table.smsMessageId, builder: (column) => column);
 
   GeneratedColumn<String> get sender =>
       $composableBuilder(column: $table.sender, builder: (column) => column);
@@ -1994,6 +4131,7 @@ class $$UnparsedMessagesTableTableManager extends RootTableManager<
               $$UnparsedMessagesTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback: ({
             Value<int> id = const Value.absent(),
+            Value<int?> smsMessageId = const Value.absent(),
             Value<String> sender = const Value.absent(),
             Value<String> body = const Value.absent(),
             Value<DateTime> receivedAt = const Value.absent(),
@@ -2001,6 +4139,7 @@ class $$UnparsedMessagesTableTableManager extends RootTableManager<
           }) =>
               UnparsedMessagesCompanion(
             id: id,
+            smsMessageId: smsMessageId,
             sender: sender,
             body: body,
             receivedAt: receivedAt,
@@ -2008,6 +4147,7 @@ class $$UnparsedMessagesTableTableManager extends RootTableManager<
           ),
           createCompanionCallback: ({
             Value<int> id = const Value.absent(),
+            Value<int?> smsMessageId = const Value.absent(),
             required String sender,
             required String body,
             required DateTime receivedAt,
@@ -2015,6 +4155,7 @@ class $$UnparsedMessagesTableTableManager extends RootTableManager<
           }) =>
               UnparsedMessagesCompanion.insert(
             id: id,
+            smsMessageId: smsMessageId,
             sender: sender,
             body: body,
             receivedAt: receivedAt,
@@ -2042,6 +4183,975 @@ typedef $$UnparsedMessagesTableProcessedTableManager = ProcessedTableManager<
     ),
     UnparsedMessage,
     PrefetchHooks Function()>;
+typedef $$FinancialProvidersTableCreateCompanionBuilder
+    = FinancialProvidersCompanion Function({
+  Value<int> id,
+  required String code,
+  required String displayName,
+  required String category,
+});
+typedef $$FinancialProvidersTableUpdateCompanionBuilder
+    = FinancialProvidersCompanion Function({
+  Value<int> id,
+  Value<String> code,
+  Value<String> displayName,
+  Value<String> category,
+});
+
+class $$FinancialProvidersTableFilterComposer
+    extends Composer<_$AppDatabase, $FinancialProvidersTable> {
+  $$FinancialProvidersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get code => $composableBuilder(
+      column: $table.code, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get category => $composableBuilder(
+      column: $table.category, builder: (column) => ColumnFilters(column));
+}
+
+class $$FinancialProvidersTableOrderingComposer
+    extends Composer<_$AppDatabase, $FinancialProvidersTable> {
+  $$FinancialProvidersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get code => $composableBuilder(
+      column: $table.code, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get category => $composableBuilder(
+      column: $table.category, builder: (column) => ColumnOrderings(column));
+}
+
+class $$FinancialProvidersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FinancialProvidersTable> {
+  $$FinancialProvidersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get code =>
+      $composableBuilder(column: $table.code, builder: (column) => column);
+
+  GeneratedColumn<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => column);
+
+  GeneratedColumn<String> get category =>
+      $composableBuilder(column: $table.category, builder: (column) => column);
+}
+
+class $$FinancialProvidersTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $FinancialProvidersTable,
+    FinancialProvider,
+    $$FinancialProvidersTableFilterComposer,
+    $$FinancialProvidersTableOrderingComposer,
+    $$FinancialProvidersTableAnnotationComposer,
+    $$FinancialProvidersTableCreateCompanionBuilder,
+    $$FinancialProvidersTableUpdateCompanionBuilder,
+    (
+      FinancialProvider,
+      BaseReferences<_$AppDatabase, $FinancialProvidersTable, FinancialProvider>
+    ),
+    FinancialProvider,
+    PrefetchHooks Function()> {
+  $$FinancialProvidersTableTableManager(
+      _$AppDatabase db, $FinancialProvidersTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FinancialProvidersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FinancialProvidersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FinancialProvidersTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> code = const Value.absent(),
+            Value<String> displayName = const Value.absent(),
+            Value<String> category = const Value.absent(),
+          }) =>
+              FinancialProvidersCompanion(
+            id: id,
+            code: code,
+            displayName: displayName,
+            category: category,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String code,
+            required String displayName,
+            required String category,
+          }) =>
+              FinancialProvidersCompanion.insert(
+            id: id,
+            code: code,
+            displayName: displayName,
+            category: category,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$FinancialProvidersTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $FinancialProvidersTable,
+    FinancialProvider,
+    $$FinancialProvidersTableFilterComposer,
+    $$FinancialProvidersTableOrderingComposer,
+    $$FinancialProvidersTableAnnotationComposer,
+    $$FinancialProvidersTableCreateCompanionBuilder,
+    $$FinancialProvidersTableUpdateCompanionBuilder,
+    (
+      FinancialProvider,
+      BaseReferences<_$AppDatabase, $FinancialProvidersTable, FinancialProvider>
+    ),
+    FinancialProvider,
+    PrefetchHooks Function()>;
+typedef $$ProviderSendersTableCreateCompanionBuilder = ProviderSendersCompanion
+    Function({
+  Value<int> id,
+  required String senderPattern,
+  required int providerId,
+});
+typedef $$ProviderSendersTableUpdateCompanionBuilder = ProviderSendersCompanion
+    Function({
+  Value<int> id,
+  Value<String> senderPattern,
+  Value<int> providerId,
+});
+
+class $$ProviderSendersTableFilterComposer
+    extends Composer<_$AppDatabase, $ProviderSendersTable> {
+  $$ProviderSendersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderPattern => $composableBuilder(
+      column: $table.senderPattern, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnFilters(column));
+}
+
+class $$ProviderSendersTableOrderingComposer
+    extends Composer<_$AppDatabase, $ProviderSendersTable> {
+  $$ProviderSendersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderPattern => $composableBuilder(
+      column: $table.senderPattern,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ProviderSendersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ProviderSendersTable> {
+  $$ProviderSendersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get senderPattern => $composableBuilder(
+      column: $table.senderPattern, builder: (column) => column);
+
+  GeneratedColumn<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => column);
+}
+
+class $$ProviderSendersTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $ProviderSendersTable,
+    ProviderSender,
+    $$ProviderSendersTableFilterComposer,
+    $$ProviderSendersTableOrderingComposer,
+    $$ProviderSendersTableAnnotationComposer,
+    $$ProviderSendersTableCreateCompanionBuilder,
+    $$ProviderSendersTableUpdateCompanionBuilder,
+    (
+      ProviderSender,
+      BaseReferences<_$AppDatabase, $ProviderSendersTable, ProviderSender>
+    ),
+    ProviderSender,
+    PrefetchHooks Function()> {
+  $$ProviderSendersTableTableManager(
+      _$AppDatabase db, $ProviderSendersTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ProviderSendersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ProviderSendersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ProviderSendersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> senderPattern = const Value.absent(),
+            Value<int> providerId = const Value.absent(),
+          }) =>
+              ProviderSendersCompanion(
+            id: id,
+            senderPattern: senderPattern,
+            providerId: providerId,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String senderPattern,
+            required int providerId,
+          }) =>
+              ProviderSendersCompanion.insert(
+            id: id,
+            senderPattern: senderPattern,
+            providerId: providerId,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ProviderSendersTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $ProviderSendersTable,
+    ProviderSender,
+    $$ProviderSendersTableFilterComposer,
+    $$ProviderSendersTableOrderingComposer,
+    $$ProviderSendersTableAnnotationComposer,
+    $$ProviderSendersTableCreateCompanionBuilder,
+    $$ProviderSendersTableUpdateCompanionBuilder,
+    (
+      ProviderSender,
+      BaseReferences<_$AppDatabase, $ProviderSendersTable, ProviderSender>
+    ),
+    ProviderSender,
+    PrefetchHooks Function()>;
+typedef $$SmsMessagesTableCreateCompanionBuilder = SmsMessagesCompanion
+    Function({
+  Value<int> id,
+  required String sender,
+  required String body,
+  required DateTime receivedAt,
+  required String smsHash,
+  Value<int?> providerId,
+  Value<SmsProcessingStatus> processingStatus,
+  Value<DateTime> createdAt,
+});
+typedef $$SmsMessagesTableUpdateCompanionBuilder = SmsMessagesCompanion
+    Function({
+  Value<int> id,
+  Value<String> sender,
+  Value<String> body,
+  Value<DateTime> receivedAt,
+  Value<String> smsHash,
+  Value<int?> providerId,
+  Value<SmsProcessingStatus> processingStatus,
+  Value<DateTime> createdAt,
+});
+
+class $$SmsMessagesTableFilterComposer
+    extends Composer<_$AppDatabase, $SmsMessagesTable> {
+  $$SmsMessagesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get sender => $composableBuilder(
+      column: $table.sender, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get body => $composableBuilder(
+      column: $table.body, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get receivedAt => $composableBuilder(
+      column: $table.receivedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get smsHash => $composableBuilder(
+      column: $table.smsHash, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnFilters(column));
+
+  ColumnWithTypeConverterFilters<SmsProcessingStatus, SmsProcessingStatus,
+          String>
+      get processingStatus => $composableBuilder(
+          column: $table.processingStatus,
+          builder: (column) => ColumnWithTypeConverterFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$SmsMessagesTableOrderingComposer
+    extends Composer<_$AppDatabase, $SmsMessagesTable> {
+  $$SmsMessagesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get sender => $composableBuilder(
+      column: $table.sender, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get body => $composableBuilder(
+      column: $table.body, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get receivedAt => $composableBuilder(
+      column: $table.receivedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get smsHash => $composableBuilder(
+      column: $table.smsHash, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get processingStatus => $composableBuilder(
+      column: $table.processingStatus,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$SmsMessagesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SmsMessagesTable> {
+  $$SmsMessagesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get sender =>
+      $composableBuilder(column: $table.sender, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get receivedAt => $composableBuilder(
+      column: $table.receivedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get smsHash =>
+      $composableBuilder(column: $table.smsHash, builder: (column) => column);
+
+  GeneratedColumn<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<SmsProcessingStatus, String>
+      get processingStatus => $composableBuilder(
+          column: $table.processingStatus, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$SmsMessagesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $SmsMessagesTable,
+    SmsMessage,
+    $$SmsMessagesTableFilterComposer,
+    $$SmsMessagesTableOrderingComposer,
+    $$SmsMessagesTableAnnotationComposer,
+    $$SmsMessagesTableCreateCompanionBuilder,
+    $$SmsMessagesTableUpdateCompanionBuilder,
+    (SmsMessage, BaseReferences<_$AppDatabase, $SmsMessagesTable, SmsMessage>),
+    SmsMessage,
+    PrefetchHooks Function()> {
+  $$SmsMessagesTableTableManager(_$AppDatabase db, $SmsMessagesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SmsMessagesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SmsMessagesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SmsMessagesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> sender = const Value.absent(),
+            Value<String> body = const Value.absent(),
+            Value<DateTime> receivedAt = const Value.absent(),
+            Value<String> smsHash = const Value.absent(),
+            Value<int?> providerId = const Value.absent(),
+            Value<SmsProcessingStatus> processingStatus = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              SmsMessagesCompanion(
+            id: id,
+            sender: sender,
+            body: body,
+            receivedAt: receivedAt,
+            smsHash: smsHash,
+            providerId: providerId,
+            processingStatus: processingStatus,
+            createdAt: createdAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String sender,
+            required String body,
+            required DateTime receivedAt,
+            required String smsHash,
+            Value<int?> providerId = const Value.absent(),
+            Value<SmsProcessingStatus> processingStatus = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              SmsMessagesCompanion.insert(
+            id: id,
+            sender: sender,
+            body: body,
+            receivedAt: receivedAt,
+            smsHash: smsHash,
+            providerId: providerId,
+            processingStatus: processingStatus,
+            createdAt: createdAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$SmsMessagesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $SmsMessagesTable,
+    SmsMessage,
+    $$SmsMessagesTableFilterComposer,
+    $$SmsMessagesTableOrderingComposer,
+    $$SmsMessagesTableAnnotationComposer,
+    $$SmsMessagesTableCreateCompanionBuilder,
+    $$SmsMessagesTableUpdateCompanionBuilder,
+    (SmsMessage, BaseReferences<_$AppDatabase, $SmsMessagesTable, SmsMessage>),
+    SmsMessage,
+    PrefetchHooks Function()>;
+typedef $$AccountsTableCreateCompanionBuilder = AccountsCompanion Function({
+  Value<int> id,
+  required int providerId,
+  required String label,
+});
+typedef $$AccountsTableUpdateCompanionBuilder = AccountsCompanion Function({
+  Value<int> id,
+  Value<int> providerId,
+  Value<String> label,
+});
+
+class $$AccountsTableFilterComposer
+    extends Composer<_$AppDatabase, $AccountsTable> {
+  $$AccountsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get label => $composableBuilder(
+      column: $table.label, builder: (column) => ColumnFilters(column));
+}
+
+class $$AccountsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AccountsTable> {
+  $$AccountsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get label => $composableBuilder(
+      column: $table.label, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AccountsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AccountsTable> {
+  $$AccountsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => column);
+
+  GeneratedColumn<String> get label =>
+      $composableBuilder(column: $table.label, builder: (column) => column);
+}
+
+class $$AccountsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AccountsTable,
+    Account,
+    $$AccountsTableFilterComposer,
+    $$AccountsTableOrderingComposer,
+    $$AccountsTableAnnotationComposer,
+    $$AccountsTableCreateCompanionBuilder,
+    $$AccountsTableUpdateCompanionBuilder,
+    (Account, BaseReferences<_$AppDatabase, $AccountsTable, Account>),
+    Account,
+    PrefetchHooks Function()> {
+  $$AccountsTableTableManager(_$AppDatabase db, $AccountsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AccountsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AccountsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AccountsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<int> providerId = const Value.absent(),
+            Value<String> label = const Value.absent(),
+          }) =>
+              AccountsCompanion(
+            id: id,
+            providerId: providerId,
+            label: label,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required int providerId,
+            required String label,
+          }) =>
+              AccountsCompanion.insert(
+            id: id,
+            providerId: providerId,
+            label: label,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AccountsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AccountsTable,
+    Account,
+    $$AccountsTableFilterComposer,
+    $$AccountsTableOrderingComposer,
+    $$AccountsTableAnnotationComposer,
+    $$AccountsTableCreateCompanionBuilder,
+    $$AccountsTableUpdateCompanionBuilder,
+    (Account, BaseReferences<_$AppDatabase, $AccountsTable, Account>),
+    Account,
+    PrefetchHooks Function()>;
+typedef $$MerchantsTableCreateCompanionBuilder = MerchantsCompanion Function({
+  Value<int> id,
+  required String name,
+  required String normalizedName,
+  Value<int?> categoryId,
+});
+typedef $$MerchantsTableUpdateCompanionBuilder = MerchantsCompanion Function({
+  Value<int> id,
+  Value<String> name,
+  Value<String> normalizedName,
+  Value<int?> categoryId,
+});
+
+class $$MerchantsTableFilterComposer
+    extends Composer<_$AppDatabase, $MerchantsTable> {
+  $$MerchantsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get normalizedName => $composableBuilder(
+      column: $table.normalizedName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => ColumnFilters(column));
+}
+
+class $$MerchantsTableOrderingComposer
+    extends Composer<_$AppDatabase, $MerchantsTable> {
+  $$MerchantsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get normalizedName => $composableBuilder(
+      column: $table.normalizedName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => ColumnOrderings(column));
+}
+
+class $$MerchantsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MerchantsTable> {
+  $$MerchantsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get normalizedName => $composableBuilder(
+      column: $table.normalizedName, builder: (column) => column);
+
+  GeneratedColumn<int> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => column);
+}
+
+class $$MerchantsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $MerchantsTable,
+    Merchant,
+    $$MerchantsTableFilterComposer,
+    $$MerchantsTableOrderingComposer,
+    $$MerchantsTableAnnotationComposer,
+    $$MerchantsTableCreateCompanionBuilder,
+    $$MerchantsTableUpdateCompanionBuilder,
+    (Merchant, BaseReferences<_$AppDatabase, $MerchantsTable, Merchant>),
+    Merchant,
+    PrefetchHooks Function()> {
+  $$MerchantsTableTableManager(_$AppDatabase db, $MerchantsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MerchantsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MerchantsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MerchantsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> name = const Value.absent(),
+            Value<String> normalizedName = const Value.absent(),
+            Value<int?> categoryId = const Value.absent(),
+          }) =>
+              MerchantsCompanion(
+            id: id,
+            name: name,
+            normalizedName: normalizedName,
+            categoryId: categoryId,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String name,
+            required String normalizedName,
+            Value<int?> categoryId = const Value.absent(),
+          }) =>
+              MerchantsCompanion.insert(
+            id: id,
+            name: name,
+            normalizedName: normalizedName,
+            categoryId: categoryId,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$MerchantsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $MerchantsTable,
+    Merchant,
+    $$MerchantsTableFilterComposer,
+    $$MerchantsTableOrderingComposer,
+    $$MerchantsTableAnnotationComposer,
+    $$MerchantsTableCreateCompanionBuilder,
+    $$MerchantsTableUpdateCompanionBuilder,
+    (Merchant, BaseReferences<_$AppDatabase, $MerchantsTable, Merchant>),
+    Merchant,
+    PrefetchHooks Function()>;
+typedef $$TransferLinksTableCreateCompanionBuilder = TransferLinksCompanion
+    Function({
+  Value<int> id,
+  required int fromTransactionId,
+  required int toTransactionId,
+  required TransferMatchConfidence confidence,
+  required String matchReason,
+  Value<DateTime> createdAt,
+});
+typedef $$TransferLinksTableUpdateCompanionBuilder = TransferLinksCompanion
+    Function({
+  Value<int> id,
+  Value<int> fromTransactionId,
+  Value<int> toTransactionId,
+  Value<TransferMatchConfidence> confidence,
+  Value<String> matchReason,
+  Value<DateTime> createdAt,
+});
+
+class $$TransferLinksTableFilterComposer
+    extends Composer<_$AppDatabase, $TransferLinksTable> {
+  $$TransferLinksTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get fromTransactionId => $composableBuilder(
+      column: $table.fromTransactionId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get toTransactionId => $composableBuilder(
+      column: $table.toTransactionId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnWithTypeConverterFilters<TransferMatchConfidence,
+          TransferMatchConfidence, String>
+      get confidence => $composableBuilder(
+          column: $table.confidence,
+          builder: (column) => ColumnWithTypeConverterFilters(column));
+
+  ColumnFilters<String> get matchReason => $composableBuilder(
+      column: $table.matchReason, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$TransferLinksTableOrderingComposer
+    extends Composer<_$AppDatabase, $TransferLinksTable> {
+  $$TransferLinksTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get fromTransactionId => $composableBuilder(
+      column: $table.fromTransactionId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get toTransactionId => $composableBuilder(
+      column: $table.toTransactionId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get confidence => $composableBuilder(
+      column: $table.confidence, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get matchReason => $composableBuilder(
+      column: $table.matchReason, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$TransferLinksTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TransferLinksTable> {
+  $$TransferLinksTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get fromTransactionId => $composableBuilder(
+      column: $table.fromTransactionId, builder: (column) => column);
+
+  GeneratedColumn<int> get toTransactionId => $composableBuilder(
+      column: $table.toTransactionId, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<TransferMatchConfidence, String>
+      get confidence => $composableBuilder(
+          column: $table.confidence, builder: (column) => column);
+
+  GeneratedColumn<String> get matchReason => $composableBuilder(
+      column: $table.matchReason, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$TransferLinksTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $TransferLinksTable,
+    TransferLink,
+    $$TransferLinksTableFilterComposer,
+    $$TransferLinksTableOrderingComposer,
+    $$TransferLinksTableAnnotationComposer,
+    $$TransferLinksTableCreateCompanionBuilder,
+    $$TransferLinksTableUpdateCompanionBuilder,
+    (
+      TransferLink,
+      BaseReferences<_$AppDatabase, $TransferLinksTable, TransferLink>
+    ),
+    TransferLink,
+    PrefetchHooks Function()> {
+  $$TransferLinksTableTableManager(_$AppDatabase db, $TransferLinksTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TransferLinksTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TransferLinksTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TransferLinksTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<int> fromTransactionId = const Value.absent(),
+            Value<int> toTransactionId = const Value.absent(),
+            Value<TransferMatchConfidence> confidence = const Value.absent(),
+            Value<String> matchReason = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              TransferLinksCompanion(
+            id: id,
+            fromTransactionId: fromTransactionId,
+            toTransactionId: toTransactionId,
+            confidence: confidence,
+            matchReason: matchReason,
+            createdAt: createdAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required int fromTransactionId,
+            required int toTransactionId,
+            required TransferMatchConfidence confidence,
+            required String matchReason,
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              TransferLinksCompanion.insert(
+            id: id,
+            fromTransactionId: fromTransactionId,
+            toTransactionId: toTransactionId,
+            confidence: confidence,
+            matchReason: matchReason,
+            createdAt: createdAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$TransferLinksTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $TransferLinksTable,
+    TransferLink,
+    $$TransferLinksTableFilterComposer,
+    $$TransferLinksTableOrderingComposer,
+    $$TransferLinksTableAnnotationComposer,
+    $$TransferLinksTableCreateCompanionBuilder,
+    $$TransferLinksTableUpdateCompanionBuilder,
+    (
+      TransferLink,
+      BaseReferences<_$AppDatabase, $TransferLinksTable, TransferLink>
+    ),
+    TransferLink,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2054,4 +5164,16 @@ class $AppDatabaseManager {
       $$TransactionsTableTableManager(_db, _db.transactions);
   $$UnparsedMessagesTableTableManager get unparsedMessages =>
       $$UnparsedMessagesTableTableManager(_db, _db.unparsedMessages);
+  $$FinancialProvidersTableTableManager get financialProviders =>
+      $$FinancialProvidersTableTableManager(_db, _db.financialProviders);
+  $$ProviderSendersTableTableManager get providerSenders =>
+      $$ProviderSendersTableTableManager(_db, _db.providerSenders);
+  $$SmsMessagesTableTableManager get smsMessages =>
+      $$SmsMessagesTableTableManager(_db, _db.smsMessages);
+  $$AccountsTableTableManager get accounts =>
+      $$AccountsTableTableManager(_db, _db.accounts);
+  $$MerchantsTableTableManager get merchants =>
+      $$MerchantsTableTableManager(_db, _db.merchants);
+  $$TransferLinksTableTableManager get transferLinks =>
+      $$TransferLinksTableTableManager(_db, _db.transferLinks);
 }

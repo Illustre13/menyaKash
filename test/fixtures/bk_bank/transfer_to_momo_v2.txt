@@ -1,0 +1,1 @@
+TRANSFER - MTN mobile money Credited account: 250786949188  Debited account: 100164411855  Amount: RWF 100,000 Transaction Charge: RWF 0 Event #: FTCM26156DRLPXUOI  Status: COMPLETED Date: 6/5/26, 1:47 AM  Channel:MOBILE Available Balance: RWF 312,294 For enquiry call BK

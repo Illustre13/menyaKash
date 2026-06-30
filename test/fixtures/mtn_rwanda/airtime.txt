@@ -1,1 +1,1 @@
-Your airtime purchase of 1,000 RWF was successful on 08/07/2026 07:00:00. Your new balance: 8,000 RWF.
+*162*TxId:14893044060*S*Your payment of 100 RWF to Airtime with token  has been completed at 2026-07-20 15:18:25. Fee was 0 RWF. Your new balance: 97467 RWF . Message: - -. *EN#

@@ -1,0 +1,1 @@
+*164*S*Y'ello,A transaction of 1000 RWF by BESOFT LTD  on your MOMO account was successfully completed at 2026-04-20 11:42:06. Message from debit receiver: SDA Church offering. Your new balance:4278 RWF. Fee was 0 RWF. Financial Transaction Id: 13617145897. External Transaction Id: CFMSRW1675098.*EN#

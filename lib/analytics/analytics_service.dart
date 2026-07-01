@@ -72,10 +72,18 @@ class AnalyticsService {
 
   final AppDatabase _db;
 
+  /// [received]/[deposit]/[sent]/[bankTransfer]/etc. totals here
+  /// deliberately exclude any transaction linked as one side of an
+  /// internal transfer (see [TransferLinks]) — the Phase 3 fix for the
+  /// confirmed real problem where e.g. a BK debit and its matching MTN
+  /// credit would otherwise be double-counted as unrelated
+  /// income+expense instead of recognized as one internal movement of
+  /// the user's own money (docs/AUDIT_PHASE_0.md §3.2).
   Future<SpendSummary> summary({Period? period}) async {
     final query = _db.select(_db.transactions);
     _applyPeriod(query, period);
     final rows = await query.get();
+    final linkedIds = await _linkedTransactionIds();
 
     var totalIn = 0.0;
     var totalOut = 0.0;
@@ -83,8 +91,11 @@ class AnalyticsService {
     double? latestBalance;
 
     for (final tx in rows) {
-      if (_inboundTypes.contains(tx.type)) totalIn += tx.amount;
-      if (_outboundTypes.contains(tx.type)) totalOut += (tx.amount + tx.fee);
+      final isTransfer = linkedIds.contains(tx.id);
+      if (!isTransfer) {
+        if (_inboundTypes.contains(tx.type)) totalIn += tx.amount;
+        if (_outboundTypes.contains(tx.type)) totalOut += (tx.amount + tx.fee);
+      }
 
       if (tx.balanceAfter != null &&
           (latestTimestamp == null || tx.timestamp.isAfter(latestTimestamp))) {
@@ -100,6 +111,22 @@ class AnalyticsService {
     );
   }
 
+  /// Every transaction id that's one side of a recorded [TransferLinks]
+  /// row — fetched once per call site rather than queried per-row, so
+  /// excluding transfers from a summary stays a single extra query
+  /// regardless of how many transactions are being summarized.
+  Future<Set<int>> _linkedTransactionIds() async {
+    final fromIds = await (_db.selectOnly(_db.transferLinks)
+          ..addColumns([_db.transferLinks.fromTransactionId]))
+        .map((row) => row.read(_db.transferLinks.fromTransactionId)!)
+        .get();
+    final toIds = await (_db.selectOnly(_db.transferLinks)
+          ..addColumns([_db.transferLinks.toTransactionId]))
+        .map((row) => row.read(_db.transferLinks.toTransactionId)!)
+        .get();
+    return {...fromIds, ...toIds};
+  }
+
   /// [summary] for [period] alongside the same-granularity previous
   /// period, for "vs last month" style deltas on the dashboard.
   Future<PeriodComparison> summaryWithComparison(Period period) async {
@@ -109,10 +136,12 @@ class AnalyticsService {
   }
 
   /// Spend grouped by category, outbound transactions only — this is
-  /// what powers the "where did my money go" bar chart.
+  /// what powers the "where did my money go" bar chart. Excludes
+  /// internal-transfer transactions (see [summary] doc for why).
   Future<List<CategorySpend>> spendByCategory({Period? period}) async {
     final categoryName = _db.categories.name;
     final amount = _db.transactions.amount;
+    final linkedIds = await _linkedTransactionIds();
 
     final query = _db.selectOnly(_db.transactions)
       ..addColumns([categoryName, amount.sum()])
@@ -125,6 +154,9 @@ class AnalyticsService {
       ..where(_db.transactions.type.isIn(_outboundTypes.map((t) => t.name)))
       ..groupBy([categoryName]);
 
+    if (linkedIds.isNotEmpty) {
+      query.where(_db.transactions.id.isNotIn(linkedIds));
+    }
     if (period != null) {
       query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
           _db.transactions.timestamp.isSmallerThanValue(period.end));
@@ -144,9 +176,11 @@ class AnalyticsService {
   /// spending-over-time trend chart. Independent of the period selector:
   /// always shows a rolling window ending at the current month, so the
   /// user has a trend line regardless of which single period is focused.
+  /// Excludes internal-transfer transactions (see [summary] doc).
   Future<List<PeriodSpend>> monthlySpend({int months = 6}) async {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month - months + 1, 1);
+    final linkedIds = await _linkedTransactionIds();
 
     final rows = await (_db.select(_db.transactions)
           ..where((tbl) =>
@@ -160,6 +194,7 @@ class AnalyticsService {
       buckets[bucketStart] = 0;
     }
     for (final tx in rows) {
+      if (linkedIds.contains(tx.id)) continue;
       final bucketStart = DateTime(tx.timestamp.year, tx.timestamp.month, 1);
       buckets[bucketStart] = (buckets[bucketStart] ?? 0) + tx.amount + tx.fee;
     }
@@ -168,12 +203,16 @@ class AnalyticsService {
     return sortedKeys.map((k) => PeriodSpend(k, buckets[k]!)).toList();
   }
 
+  /// Excludes internal-transfer transactions (see [summary] doc) — a
+  /// transfer's "counterparty" is really just the user's own other
+  /// account, not a real payee, so it would be meaningless here anyway.
   Future<List<MapEntry<String, double>>> topCounterparties({
     int limit = 5,
     Period? period,
   }) async {
     final counterparty = _db.transactions.counterparty;
     final amount = _db.transactions.amount;
+    final linkedIds = await _linkedTransactionIds();
 
     final query = _db.selectOnly(_db.transactions)
       ..addColumns([counterparty, amount.sum()])
@@ -183,6 +222,9 @@ class AnalyticsService {
       ..orderBy([OrderingTerm.desc(amount.sum())])
       ..limit(limit);
 
+    if (linkedIds.isNotEmpty) {
+      query.where(_db.transactions.id.isNotIn(linkedIds));
+    }
     if (period != null) {
       query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
           _db.transactions.timestamp.isSmallerThanValue(period.end));

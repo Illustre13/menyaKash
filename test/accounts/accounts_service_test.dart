@@ -15,20 +15,31 @@ void main() {
 
   tearDown(() => db.close());
 
-  test('one default account exists per seeded provider', () async {
+  test('a fresh database has zero accounts until providers are selected', () async {
     final summaries = await service.allAccountSummaries();
-    final codes = await db.select(db.financialProviders).get();
-    expect(summaries.length, codes.length);
+    expect(summaries, isEmpty, reason: 'accounts are no longer auto-seeded for every provider');
+  });
+
+  test('ensureAccountForProvider creates exactly one account per provider, idempotently', () async {
+    final mtnProvider = await (db.select(db.financialProviders)
+          ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
+        .getSingle();
+
+    final first = await service.ensureAccountForProvider(mtnProvider.id);
+    final second = await service.ensureAccountForProvider(mtnProvider.id);
+
+    expect(second.id, first.id, reason: 'calling it again must not create a duplicate account');
+    final summaries = await service.allAccountSummaries();
+    expect(summaries.length, 1);
   });
 
   test('a fresh account with no transactions has a null current balance', () async {
     final mtnProvider = await (db.select(db.financialProviders)
           ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
         .getSingle();
-    final account = await service.defaultAccountForProvider(mtnProvider.id);
-    expect(account, isNotNull);
+    final account = await service.ensureAccountForProvider(mtnProvider.id);
 
-    final balance = await service.currentBalance(account!.id);
+    final balance = await service.currentBalance(account.id);
     expect(balance, isNull);
   });
 
@@ -36,10 +47,10 @@ void main() {
     final mtnProvider = await (db.select(db.financialProviders)
           ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
         .getSingle();
-    final account = await service.defaultAccountForProvider(mtnProvider.id);
+    final account = await service.ensureAccountForProvider(mtnProvider.id);
 
     await db.into(db.transactions).insert(TransactionsCompanion.insert(
-          accountId: Value(account!.id),
+          accountId: Value(account.id),
           type: TransactionType.received,
           amount: 5000,
           balanceAfter: const Value(5000),
@@ -63,9 +74,9 @@ void main() {
     final mtnProvider = await (db.select(db.financialProviders)
           ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
         .getSingle();
-    final account = await service.defaultAccountForProvider(mtnProvider.id);
+    final account = await service.ensureAccountForProvider(mtnProvider.id);
 
-    await service.renameAccount(account!.id, 'My Personal MoMo');
+    await service.renameAccount(account.id, 'My Personal MoMo');
 
     final updated =
         await (db.select(db.accounts)..where((tbl) => tbl.id.equals(account.id))).getSingle();

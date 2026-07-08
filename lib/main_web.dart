@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'accounts/accounts_service.dart';
 import 'analytics/analytics_service.dart';
 import 'categorization/categorization_service.dart';
 import 'contacts/contacts_service.dart';
 import 'data/database.dart';
 import 'data/dev_seed_data.dart';
+import 'profile/user_profile_service.dart';
+import 'providers/provider_selection_service.dart';
 import 'screens/categorize_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/pay_screen.dart';
@@ -50,6 +53,9 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
   final _db = AppDatabase();
   late final _categorizationService = CategorizationService(_db);
   late final _analyticsService = AnalyticsService(_db);
+  late final _accountsService = AccountsService(_db);
+  late final _profileService = UserProfileService(_db);
+  late final _providerSelectionService = ProviderSelectionService(_db, _accountsService);
   final _contactsService = ContactsService();
 
   bool _seeded = false;
@@ -79,7 +85,12 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
     }
 
     final screens = [
-      DashboardScreen(analytics: _analyticsService),
+      DashboardScreen(
+        analytics: _analyticsService,
+        profileService: _profileService,
+        accountsService: _accountsService,
+        providerSelectionService: _providerSelectionService,
+      ),
       PayScreen(
         contactsService: _contactsService,
         categorizationService: _categorizationService,

@@ -71,4 +71,27 @@ class AccountsService {
     await (_db.update(_db.accounts)..where((tbl) => tbl.id.equals(accountId)))
         .write(AccountsCompanion(label: Value(newLabel)));
   }
+
+  /// Creates an [Accounts] row for [providerId] if one doesn't already
+  /// exist — called by [ProviderSelectionService] the moment a user
+  /// selects a provider (onboarding's Phase 6 screen, or later toggling
+  /// one on in Settings). From schemaVersion 4 onward this is the only
+  /// path that creates a new account for a provider that didn't already
+  /// have one; there is no longer an unconditional "one account per
+  /// every seeded provider" step.
+  Future<Account> ensureAccountForProvider(int providerId) async {
+    final existing = await defaultAccountForProvider(providerId);
+    if (existing != null) return existing;
+
+    final provider = await (_db.select(_db.financialProviders)
+          ..where((tbl) => tbl.id.equals(providerId)))
+        .getSingle();
+    final id = await _db.into(_db.accounts).insert(
+          AccountsCompanion.insert(
+            providerId: providerId,
+            label: 'My ${provider.displayName}',
+          ),
+        );
+    return (_db.select(_db.accounts)..where((tbl) => tbl.id.equals(id))).getSingle();
+  }
 }

@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:i_momo/accounts/accounts_service.dart';
 import 'package:i_momo/data/database.dart';
 import 'package:i_momo/transfers/transfer_matching_engine.dart';
 
@@ -13,6 +14,7 @@ void main() {
   setUp(() async {
     db = AppDatabase.forTesting(NativeDatabase.memory());
     engine = TransferMatchingEngine(db);
+    final accountsService = AccountsService(db);
 
     final mtnProvider = await (db.select(db.financialProviders)
           ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
@@ -20,14 +22,11 @@ void main() {
     final equityProvider = await (db.select(db.financialProviders)
           ..where((tbl) => tbl.code.equals('equity_bank_rw')))
         .getSingle();
-    mtnAccountId =
-        (await (db.select(db.accounts)..where((tbl) => tbl.providerId.equals(mtnProvider.id)))
-                .getSingle())
-            .id;
-    equityAccountId =
-        (await (db.select(db.accounts)..where((tbl) => tbl.providerId.equals(equityProvider.id)))
-                .getSingle())
-            .id;
+    // schemaVersion 4 no longer auto-seeds an Accounts row per provider —
+    // create them explicitly, same as a real user selecting these two
+    // providers on the Phase 6 setup screen would.
+    mtnAccountId = (await accountsService.ensureAccountForProvider(mtnProvider.id)).id;
+    equityAccountId = (await accountsService.ensureAccountForProvider(equityProvider.id)).id;
   });
 
   tearDown(() => db.close());

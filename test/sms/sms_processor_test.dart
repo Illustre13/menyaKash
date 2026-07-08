@@ -89,6 +89,14 @@ void main() {
     expect(txs.single.smsMessageId, id);
     expect(txs.single.amount, 5000);
     expect(txs.single.providerId, isNotNull);
+    expect(
+      txs.single.accountId,
+      isNotNull,
+      reason: 'a real matched transaction must always get an account, even for a provider the '
+          'user never explicitly selected in onboarding (schemaVersion 4 no longer '
+          'auto-seeds Accounts for every provider — SmsProcessor creates one on demand '
+          'instead of leaving the transaction orphaned)',
+    );
 
     final updated =
         await (db.select(db.smsMessages)..where((tbl) => tbl.id.equals(id))).getSingle();

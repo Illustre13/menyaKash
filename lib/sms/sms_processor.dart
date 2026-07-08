@@ -102,14 +102,23 @@ class SmsProcessor {
       categoryId = category?.id;
     }
 
-    final account = await _accounts.defaultAccountForProvider(detection.provider.id);
+    // ensureAccountForProvider, not defaultAccountForProvider: from
+    // schemaVersion 4, Accounts are only created for providers the user
+    // has explicitly selected (spec Phase 6), so a provider the user
+    // hasn't gotten to yet in the setup screen would otherwise have no
+    // account at all and every one of its real transactions would be
+    // written with a null accountId. A message that reaches this point
+    // already matched a real parser for a real provider — that's
+    // sufficient evidence the user actually uses it, so an account is
+    // created on demand rather than the transaction being orphaned.
+    final account = await _accounts.ensureAccountForProvider(detection.provider.id);
     final merchant = await _merchants.resolveMerchant(parsed.counterparty);
 
     await _db.into(_db.transactions).insert(
           TransactionsCompanion.insert(
             smsMessageId: Value(message.id),
             providerId: Value(detection.provider.id),
-            accountId: Value(account?.id),
+            accountId: Value(account.id),
             merchantId: Value(merchant?.id),
             type: parsed.type,
             amount: parsed.amount,

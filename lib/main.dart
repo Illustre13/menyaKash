@@ -7,16 +7,19 @@ import 'categorization/categorization_service.dart';
 import 'contacts/contacts_service.dart';
 import 'data/database.dart';
 import 'parsers/momo_parser_registry.dart';
+import 'profile/user_profile_service.dart';
 import 'providers/provider_detector_factory.dart';
+import 'providers/provider_selection_service.dart';
 import 'screens/categorize_screen.dart';
 import 'screens/dashboard_screen.dart';
-import 'screens/onboarding_screen.dart';
+import 'screens/onboarding/onboarding_flow_screen.dart';
 import 'screens/pay_screen.dart';
 import 'screens/review_unparsed_screen.dart';
 import 'sms/sms_ingest_service.dart';
 import 'sms/sms_processor.dart';
 import 'theme/app_theme.dart';
 import 'transfers/transfer_matching_engine.dart';
+import 'accounts/accounts_service.dart';
 
 void main() {
   runApp(const IMomoApp());
@@ -54,15 +57,23 @@ class _HomeShellState extends State<HomeShell> {
   late final _transferEngine = TransferMatchingEngine(_db);
   late final _categorizationService = CategorizationService(_db);
   late final _analyticsService = AnalyticsService(_db);
+  late final _accountsService = AccountsService(_db);
+  late final _profileService = UserProfileService(_db);
+  late final _providerSelectionService = ProviderSelectionService(_db, _accountsService);
   final _contactsService = ContactsService();
 
   int _index = 0;
 
-  // null while we haven't yet checked whether SMS permission is already
-  // granted from a previous run; true/false once known. Onboarding
-  // (permission explainer + historical scan) only runs when this
-  // resolves to false — a returning user goes straight to the dashboard
-  // and relies on the live listener for anything new.
+  // null while we haven't yet checked onboarding-completion status from
+  // the database; true/false once known. Onboarding runs only when this
+  // resolves to false — a returning user goes straight to the dashboard.
+  //
+  // This is checked via UserProfile.onboardingCompletedAt (spec Phase
+  // 5+), not SMS-permission state as it was pre-Phase-5 — identity/
+  // provider setup and SMS access are now separable: a user who denies
+  // SMS access isn't forced to repeat the whole onboarding flow every
+  // launch, only the SMS step itself (still retryable from the
+  // dashboard's Settings if needed later).
   bool? _alreadyOnboarded;
 
   @override
@@ -72,16 +83,17 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<void> _checkOnboardingStatus() async {
-    final granted = await _ingestService.hasPermissions();
-    if (granted) {
-      // Permission already granted from a previous run: the historical
-      // scan already happened then, so just resume live listening and
-      // catch up on any transfer pairs formed by messages received
-      // since the last launch.
-      _ingestService.startLiveListener();
+    final onboarded = await _profileService.hasCompletedOnboarding();
+    if (onboarded) {
+      // Historical scan already happened during onboarding: just resume
+      // live listening and catch up on any transfer pairs formed by
+      // messages received since the last launch.
+      if (await _ingestService.hasPermissions()) {
+        _ingestService.startLiveListener();
+      }
       unawaited(_transferEngine.findAndLinkTransfers());
     }
-    setState(() => _alreadyOnboarded = granted);
+    setState(() => _alreadyOnboarded = onboarded);
   }
 
   void _onOnboardingComplete() {
@@ -108,14 +120,21 @@ class _HomeShellState extends State<HomeShell> {
     }
 
     if (_alreadyOnboarded == false) {
-      return OnboardingScreen(
+      return OnboardingFlowScreen(
         ingestService: _ingestService,
+        profileService: _profileService,
+        providerSelectionService: _providerSelectionService,
         onComplete: _onOnboardingComplete,
       );
     }
 
     final screens = [
-      DashboardScreen(analytics: _analyticsService),
+      DashboardScreen(
+        analytics: _analyticsService,
+        profileService: _profileService,
+        accountsService: _accountsService,
+        providerSelectionService: _providerSelectionService,
+      ),
       PayScreen(
         contactsService: _contactsService,
         categorizationService: _categorizationService,

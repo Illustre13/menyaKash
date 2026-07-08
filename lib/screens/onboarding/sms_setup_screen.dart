@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../sms/sms_ingest_service.dart';
+import '../../sms/sms_ingest_service.dart';
 
-/// First-run flow: explains why SMS access is needed (entirely on-device,
-/// nothing ever leaves the phone), requests the permission, then shows
-/// live progress while every existing MoMo message in the inbox is
-/// scanned and classified — so analytics are populated immediately
-/// instead of only from messages that arrive after this screen.
-class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({
+/// Onboarding step 6 (spec Phase 5, final step): explains why SMS
+/// access is needed (entirely on-device, nothing ever leaves the
+/// phone), requests the permission, then shows live progress while
+/// every existing MoMo message in the inbox is scanned and classified.
+/// Deliberately last in the flow — identity and security setup
+/// establish trust before this, the most sensitive permission ask.
+class SmsSetupScreen extends StatefulWidget {
+  const SmsSetupScreen({
     super.key,
     required this.ingestService,
     required this.onComplete,
@@ -17,16 +18,16 @@ class OnboardingScreen extends StatefulWidget {
   final SmsIngestService ingestService;
 
   /// Called once the initial scan finishes (or the user is already
-  /// permitted and has already completed onboarding before).
+  /// permitted from a previous run).
   final VoidCallback onComplete;
 
   @override
-  State<OnboardingScreen> createState() => _OnboardingScreenState();
+  State<SmsSetupScreen> createState() => _SmsSetupScreenState();
 }
 
 enum _Stage { explain, requesting, scanning, denied }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
+class _SmsSetupScreenState extends State<SmsSetupScreen> {
   _Stage _stage = _Stage.explain;
   ScanProgress? _progress;
 
@@ -86,7 +87,7 @@ class _ExplainStep extends StatelessWidget {
         const Icon(Icons.lock_outline, size: 56),
         const SizedBox(height: 24),
         Text(
-          'Welcome to i-momo',
+          'One last step',
           style: Theme.of(context).textTheme.headlineSmall,
           textAlign: TextAlign.center,
         ),

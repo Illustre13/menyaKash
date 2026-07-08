@@ -324,6 +324,73 @@ class Transactions extends Table {
       integer().nullable().references(Categories, #id)();
 }
 
+/// The single local user identity created during onboarding (spec Phase
+/// 5). Exactly one row is expected to exist in practice — this is a
+/// single-user, single-device offline app, not a multi-profile one —
+/// but modeled as a table rather than a key-value blob so it composes
+/// with drift's existing query/watch machinery like every other table
+/// here.
+///
+/// No password/credential column of any kind: [appLockEnabled] gates
+/// access via the OS's own biometric/PIN/pattern prompt (`local_auth`),
+/// never a secret this app stores or checks itself.
+class UserProfile extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get displayName => text().withLength(min: 1, max: 80).nullable()();
+
+  /// Format-validated and confirmed via a code generated and displayed
+  /// on this device's own screen — never actually delivered anywhere.
+  /// This app declares no INTERNET permission and has no network-
+  /// capable dependency, so there is no real OTP-delivery path; the
+  /// confirmation step only catches typos/misreads, it does not prove
+  /// mailbox ownership. See docs/ARCHITECTURE.md's onboarding section.
+  TextColumn get email => text().nullable()();
+
+  /// Format-validated only, not yet verified by any means — phone
+  /// verification is explicitly deferred past this phase.
+  TextColumn get phone => text().nullable()();
+
+  /// Local file path under app storage, never a remote URL.
+  TextColumn get avatarPath => text().nullable()();
+
+  BoolColumn get appLockEnabled => boolean().withDefault(const Constant(false))();
+
+  /// Set once the onboarding flow (Welcome through Provider Setup) has
+  /// been completed at least once. This is the source of truth
+  /// `HomeShell` checks to decide whether to show onboarding — replacing
+  /// the pre-Phase-5 proxy of "is SMS permission currently granted,"
+  /// which conflated permission state with identity/setup completion.
+  DateTimeColumn get onboardingCompletedAt => dateTime().nullable()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+/// A [FinancialProviders] row the user has explicitly selected on the
+/// provider-setup screen (spec Phase 6) or later in Settings — distinct
+/// from [FinancialProviders] itself (the static sender-detection
+/// registry, never user-editable) and from [Accounts] (from
+/// schemaVersion 4 onward, created only for providers selected here,
+/// not auto-seeded for every registry row — see
+/// `AccountsService.ensureAccountForProvider`).
+///
+/// Deselecting a provider later removes its row here but deliberately
+/// does not cascade-delete any [Accounts]/[Transactions] — a user's
+/// transaction history must survive them turning a provider card off.
+class UserFinancialSources extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  IntColumn get providerId =>
+      integer().references(FinancialProviders, #id, onDelete: KeyAction.cascade)();
+
+  DateTimeColumn get selectedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {providerId}
+      ];
+}
+
 /// Messages from a known-provider sender that no registered parser could
 /// match. Surfaced in the "Review" screen so the parser can be extended
 /// instead of silently dropping data. Retained as-is post-migration for
@@ -356,20 +423,26 @@ class UnparsedMessages extends Table {
   Accounts,
   Merchants,
   TransferLinks,
+  UserProfile,
+  UserFinancialSources,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           await _seedProviders();
-          await _seedDefaultAccounts();
+          // Deliberately no _seedDefaultAccounts() call here: from
+          // schemaVersion 4, a fresh install creates zero Accounts rows
+          // until the user picks providers on the Phase 6 setup screen
+          // (see UserFinancialSources doc) — _seedDefaultAccounts is
+          // kept only for the pre-v4 migration/grandfather path below.
         },
         onUpgrade: (m, from, to) async {
           if (from < 2) {
@@ -390,6 +463,11 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(transactions, transactions.merchantId);
             await _seedDefaultAccounts();
             await _backfillAccountsFromV2();
+          }
+          if (from < 4) {
+            await m.createTable(userProfile);
+            await m.createTable(userFinancialSources);
+            await _grandfatherExistingUsers();
           }
         },
       );
@@ -533,6 +611,37 @@ class AppDatabase extends _$AppDatabase {
       if (account == null) continue;
       await (update(transactions)..where((tbl) => tbl.id.equals(tx.id)))
           .write(TransactionsCompanion(accountId: Value(account.id)));
+    }
+  }
+
+  /// Existing users who completed the pre-Phase-5 SMS-only onboarding
+  /// already have real transaction history and [Accounts] rows seeded
+  /// for every provider by the old unconditional [_seedDefaultAccounts].
+  /// Forcing them back through the new identity/provider-setup flow on
+  /// their next launch would prompt for information their history
+  /// already implies and would read as hostile/data-destructive for no
+  /// real gain. Instead: if any [Accounts] rows already exist, mark
+  /// onboarding as already complete and backfill [UserFinancialSources]
+  /// from whatever providers those accounts already reference, so
+  /// Settings' "Connected Services" reflects real existing usage rather
+  /// than showing everything unselected. A genuinely fresh v4 install
+  /// has no accounts yet and falls through to the real onboarding flow.
+  Future<void> _grandfatherExistingUsers() async {
+    final existingAccounts = await select(accounts).get();
+    if (existingAccounts.isEmpty) return;
+
+    await into(userProfile).insert(
+      UserProfileCompanion.insert(
+        onboardingCompletedAt: Value(DateTime.now()),
+      ),
+    );
+
+    final seenProviderIds = <int>{};
+    for (final account in existingAccounts) {
+      if (!seenProviderIds.add(account.providerId)) continue;
+      await into(userFinancialSources).insertOnConflictUpdate(
+        UserFinancialSourcesCompanion.insert(providerId: account.providerId),
+      );
     }
   }
 

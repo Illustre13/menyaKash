@@ -3392,6 +3392,701 @@ class TransferLinksCompanion extends UpdateCompanion<TransferLink> {
   }
 }
 
+class $UserProfileTable extends UserProfile
+    with TableInfo<$UserProfileTable, UserProfileData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $UserProfileTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _displayNameMeta =
+      const VerificationMeta('displayName');
+  @override
+  late final GeneratedColumn<String> displayName = GeneratedColumn<String>(
+      'display_name', aliasedName, true,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 80),
+      type: DriftSqlType.string,
+      requiredDuringInsert: false);
+  static const VerificationMeta _emailMeta = const VerificationMeta('email');
+  @override
+  late final GeneratedColumn<String> email = GeneratedColumn<String>(
+      'email', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _phoneMeta = const VerificationMeta('phone');
+  @override
+  late final GeneratedColumn<String> phone = GeneratedColumn<String>(
+      'phone', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _avatarPathMeta =
+      const VerificationMeta('avatarPath');
+  @override
+  late final GeneratedColumn<String> avatarPath = GeneratedColumn<String>(
+      'avatar_path', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _appLockEnabledMeta =
+      const VerificationMeta('appLockEnabled');
+  @override
+  late final GeneratedColumn<bool> appLockEnabled = GeneratedColumn<bool>(
+      'app_lock_enabled', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("app_lock_enabled" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _onboardingCompletedAtMeta =
+      const VerificationMeta('onboardingCompletedAt');
+  @override
+  late final GeneratedColumn<DateTime> onboardingCompletedAt =
+      GeneratedColumn<DateTime>('onboarding_completed_at', aliasedName, true,
+          type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        displayName,
+        email,
+        phone,
+        avatarPath,
+        appLockEnabled,
+        onboardingCompletedAt,
+        createdAt
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'user_profile';
+  @override
+  VerificationContext validateIntegrity(Insertable<UserProfileData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('display_name')) {
+      context.handle(
+          _displayNameMeta,
+          displayName.isAcceptableOrUnknown(
+              data['display_name']!, _displayNameMeta));
+    }
+    if (data.containsKey('email')) {
+      context.handle(
+          _emailMeta, email.isAcceptableOrUnknown(data['email']!, _emailMeta));
+    }
+    if (data.containsKey('phone')) {
+      context.handle(
+          _phoneMeta, phone.isAcceptableOrUnknown(data['phone']!, _phoneMeta));
+    }
+    if (data.containsKey('avatar_path')) {
+      context.handle(
+          _avatarPathMeta,
+          avatarPath.isAcceptableOrUnknown(
+              data['avatar_path']!, _avatarPathMeta));
+    }
+    if (data.containsKey('app_lock_enabled')) {
+      context.handle(
+          _appLockEnabledMeta,
+          appLockEnabled.isAcceptableOrUnknown(
+              data['app_lock_enabled']!, _appLockEnabledMeta));
+    }
+    if (data.containsKey('onboarding_completed_at')) {
+      context.handle(
+          _onboardingCompletedAtMeta,
+          onboardingCompletedAt.isAcceptableOrUnknown(
+              data['onboarding_completed_at']!, _onboardingCompletedAtMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  UserProfileData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return UserProfileData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      displayName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}display_name']),
+      email: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}email']),
+      phone: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}phone']),
+      avatarPath: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}avatar_path']),
+      appLockEnabled: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}app_lock_enabled'])!,
+      onboardingCompletedAt: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime,
+          data['${effectivePrefix}onboarding_completed_at']),
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $UserProfileTable createAlias(String alias) {
+    return $UserProfileTable(attachedDatabase, alias);
+  }
+}
+
+class UserProfileData extends DataClass implements Insertable<UserProfileData> {
+  final int id;
+  final String? displayName;
+
+  /// Format-validated and confirmed via a code generated and displayed
+  /// on this device's own screen — never actually delivered anywhere.
+  /// This app declares no INTERNET permission and has no network-
+  /// capable dependency, so there is no real OTP-delivery path; the
+  /// confirmation step only catches typos/misreads, it does not prove
+  /// mailbox ownership. See docs/ARCHITECTURE.md's onboarding section.
+  final String? email;
+
+  /// Format-validated only, not yet verified by any means — phone
+  /// verification is explicitly deferred past this phase.
+  final String? phone;
+
+  /// Local file path under app storage, never a remote URL.
+  final String? avatarPath;
+  final bool appLockEnabled;
+
+  /// Set once the onboarding flow (Welcome through Provider Setup) has
+  /// been completed at least once. This is the source of truth
+  /// `HomeShell` checks to decide whether to show onboarding — replacing
+  /// the pre-Phase-5 proxy of "is SMS permission currently granted,"
+  /// which conflated permission state with identity/setup completion.
+  final DateTime? onboardingCompletedAt;
+  final DateTime createdAt;
+  const UserProfileData(
+      {required this.id,
+      this.displayName,
+      this.email,
+      this.phone,
+      this.avatarPath,
+      required this.appLockEnabled,
+      this.onboardingCompletedAt,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    if (!nullToAbsent || displayName != null) {
+      map['display_name'] = Variable<String>(displayName);
+    }
+    if (!nullToAbsent || email != null) {
+      map['email'] = Variable<String>(email);
+    }
+    if (!nullToAbsent || phone != null) {
+      map['phone'] = Variable<String>(phone);
+    }
+    if (!nullToAbsent || avatarPath != null) {
+      map['avatar_path'] = Variable<String>(avatarPath);
+    }
+    map['app_lock_enabled'] = Variable<bool>(appLockEnabled);
+    if (!nullToAbsent || onboardingCompletedAt != null) {
+      map['onboarding_completed_at'] =
+          Variable<DateTime>(onboardingCompletedAt);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  UserProfileCompanion toCompanion(bool nullToAbsent) {
+    return UserProfileCompanion(
+      id: Value(id),
+      displayName: displayName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(displayName),
+      email:
+          email == null && nullToAbsent ? const Value.absent() : Value(email),
+      phone:
+          phone == null && nullToAbsent ? const Value.absent() : Value(phone),
+      avatarPath: avatarPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(avatarPath),
+      appLockEnabled: Value(appLockEnabled),
+      onboardingCompletedAt: onboardingCompletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(onboardingCompletedAt),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory UserProfileData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return UserProfileData(
+      id: serializer.fromJson<int>(json['id']),
+      displayName: serializer.fromJson<String?>(json['displayName']),
+      email: serializer.fromJson<String?>(json['email']),
+      phone: serializer.fromJson<String?>(json['phone']),
+      avatarPath: serializer.fromJson<String?>(json['avatarPath']),
+      appLockEnabled: serializer.fromJson<bool>(json['appLockEnabled']),
+      onboardingCompletedAt:
+          serializer.fromJson<DateTime?>(json['onboardingCompletedAt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'displayName': serializer.toJson<String?>(displayName),
+      'email': serializer.toJson<String?>(email),
+      'phone': serializer.toJson<String?>(phone),
+      'avatarPath': serializer.toJson<String?>(avatarPath),
+      'appLockEnabled': serializer.toJson<bool>(appLockEnabled),
+      'onboardingCompletedAt':
+          serializer.toJson<DateTime?>(onboardingCompletedAt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  UserProfileData copyWith(
+          {int? id,
+          Value<String?> displayName = const Value.absent(),
+          Value<String?> email = const Value.absent(),
+          Value<String?> phone = const Value.absent(),
+          Value<String?> avatarPath = const Value.absent(),
+          bool? appLockEnabled,
+          Value<DateTime?> onboardingCompletedAt = const Value.absent(),
+          DateTime? createdAt}) =>
+      UserProfileData(
+        id: id ?? this.id,
+        displayName: displayName.present ? displayName.value : this.displayName,
+        email: email.present ? email.value : this.email,
+        phone: phone.present ? phone.value : this.phone,
+        avatarPath: avatarPath.present ? avatarPath.value : this.avatarPath,
+        appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+        onboardingCompletedAt: onboardingCompletedAt.present
+            ? onboardingCompletedAt.value
+            : this.onboardingCompletedAt,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  UserProfileData copyWithCompanion(UserProfileCompanion data) {
+    return UserProfileData(
+      id: data.id.present ? data.id.value : this.id,
+      displayName:
+          data.displayName.present ? data.displayName.value : this.displayName,
+      email: data.email.present ? data.email.value : this.email,
+      phone: data.phone.present ? data.phone.value : this.phone,
+      avatarPath:
+          data.avatarPath.present ? data.avatarPath.value : this.avatarPath,
+      appLockEnabled: data.appLockEnabled.present
+          ? data.appLockEnabled.value
+          : this.appLockEnabled,
+      onboardingCompletedAt: data.onboardingCompletedAt.present
+          ? data.onboardingCompletedAt.value
+          : this.onboardingCompletedAt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('UserProfileData(')
+          ..write('id: $id, ')
+          ..write('displayName: $displayName, ')
+          ..write('email: $email, ')
+          ..write('phone: $phone, ')
+          ..write('avatarPath: $avatarPath, ')
+          ..write('appLockEnabled: $appLockEnabled, ')
+          ..write('onboardingCompletedAt: $onboardingCompletedAt, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, displayName, email, phone, avatarPath,
+      appLockEnabled, onboardingCompletedAt, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is UserProfileData &&
+          other.id == this.id &&
+          other.displayName == this.displayName &&
+          other.email == this.email &&
+          other.phone == this.phone &&
+          other.avatarPath == this.avatarPath &&
+          other.appLockEnabled == this.appLockEnabled &&
+          other.onboardingCompletedAt == this.onboardingCompletedAt &&
+          other.createdAt == this.createdAt);
+}
+
+class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
+  final Value<int> id;
+  final Value<String?> displayName;
+  final Value<String?> email;
+  final Value<String?> phone;
+  final Value<String?> avatarPath;
+  final Value<bool> appLockEnabled;
+  final Value<DateTime?> onboardingCompletedAt;
+  final Value<DateTime> createdAt;
+  const UserProfileCompanion({
+    this.id = const Value.absent(),
+    this.displayName = const Value.absent(),
+    this.email = const Value.absent(),
+    this.phone = const Value.absent(),
+    this.avatarPath = const Value.absent(),
+    this.appLockEnabled = const Value.absent(),
+    this.onboardingCompletedAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  UserProfileCompanion.insert({
+    this.id = const Value.absent(),
+    this.displayName = const Value.absent(),
+    this.email = const Value.absent(),
+    this.phone = const Value.absent(),
+    this.avatarPath = const Value.absent(),
+    this.appLockEnabled = const Value.absent(),
+    this.onboardingCompletedAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  static Insertable<UserProfileData> custom({
+    Expression<int>? id,
+    Expression<String>? displayName,
+    Expression<String>? email,
+    Expression<String>? phone,
+    Expression<String>? avatarPath,
+    Expression<bool>? appLockEnabled,
+    Expression<DateTime>? onboardingCompletedAt,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (displayName != null) 'display_name': displayName,
+      if (email != null) 'email': email,
+      if (phone != null) 'phone': phone,
+      if (avatarPath != null) 'avatar_path': avatarPath,
+      if (appLockEnabled != null) 'app_lock_enabled': appLockEnabled,
+      if (onboardingCompletedAt != null)
+        'onboarding_completed_at': onboardingCompletedAt,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  UserProfileCompanion copyWith(
+      {Value<int>? id,
+      Value<String?>? displayName,
+      Value<String?>? email,
+      Value<String?>? phone,
+      Value<String?>? avatarPath,
+      Value<bool>? appLockEnabled,
+      Value<DateTime?>? onboardingCompletedAt,
+      Value<DateTime>? createdAt}) {
+    return UserProfileCompanion(
+      id: id ?? this.id,
+      displayName: displayName ?? this.displayName,
+      email: email ?? this.email,
+      phone: phone ?? this.phone,
+      avatarPath: avatarPath ?? this.avatarPath,
+      appLockEnabled: appLockEnabled ?? this.appLockEnabled,
+      onboardingCompletedAt:
+          onboardingCompletedAt ?? this.onboardingCompletedAt,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (displayName.present) {
+      map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (email.present) {
+      map['email'] = Variable<String>(email.value);
+    }
+    if (phone.present) {
+      map['phone'] = Variable<String>(phone.value);
+    }
+    if (avatarPath.present) {
+      map['avatar_path'] = Variable<String>(avatarPath.value);
+    }
+    if (appLockEnabled.present) {
+      map['app_lock_enabled'] = Variable<bool>(appLockEnabled.value);
+    }
+    if (onboardingCompletedAt.present) {
+      map['onboarding_completed_at'] =
+          Variable<DateTime>(onboardingCompletedAt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('UserProfileCompanion(')
+          ..write('id: $id, ')
+          ..write('displayName: $displayName, ')
+          ..write('email: $email, ')
+          ..write('phone: $phone, ')
+          ..write('avatarPath: $avatarPath, ')
+          ..write('appLockEnabled: $appLockEnabled, ')
+          ..write('onboardingCompletedAt: $onboardingCompletedAt, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $UserFinancialSourcesTable extends UserFinancialSources
+    with TableInfo<$UserFinancialSourcesTable, UserFinancialSource> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $UserFinancialSourcesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _providerIdMeta =
+      const VerificationMeta('providerId');
+  @override
+  late final GeneratedColumn<int> providerId = GeneratedColumn<int>(
+      'provider_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _selectedAtMeta =
+      const VerificationMeta('selectedAt');
+  @override
+  late final GeneratedColumn<DateTime> selectedAt = GeneratedColumn<DateTime>(
+      'selected_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  @override
+  List<GeneratedColumn> get $columns => [id, providerId, selectedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'user_financial_sources';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<UserFinancialSource> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+          _providerIdMeta,
+          providerId.isAcceptableOrUnknown(
+              data['provider_id']!, _providerIdMeta));
+    } else if (isInserting) {
+      context.missing(_providerIdMeta);
+    }
+    if (data.containsKey('selected_at')) {
+      context.handle(
+          _selectedAtMeta,
+          selectedAt.isAcceptableOrUnknown(
+              data['selected_at']!, _selectedAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+        {providerId},
+      ];
+  @override
+  UserFinancialSource map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return UserFinancialSource(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      providerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}provider_id'])!,
+      selectedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}selected_at'])!,
+    );
+  }
+
+  @override
+  $UserFinancialSourcesTable createAlias(String alias) {
+    return $UserFinancialSourcesTable(attachedDatabase, alias);
+  }
+}
+
+class UserFinancialSource extends DataClass
+    implements Insertable<UserFinancialSource> {
+  final int id;
+  final int providerId;
+  final DateTime selectedAt;
+  const UserFinancialSource(
+      {required this.id, required this.providerId, required this.selectedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['provider_id'] = Variable<int>(providerId);
+    map['selected_at'] = Variable<DateTime>(selectedAt);
+    return map;
+  }
+
+  UserFinancialSourcesCompanion toCompanion(bool nullToAbsent) {
+    return UserFinancialSourcesCompanion(
+      id: Value(id),
+      providerId: Value(providerId),
+      selectedAt: Value(selectedAt),
+    );
+  }
+
+  factory UserFinancialSource.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return UserFinancialSource(
+      id: serializer.fromJson<int>(json['id']),
+      providerId: serializer.fromJson<int>(json['providerId']),
+      selectedAt: serializer.fromJson<DateTime>(json['selectedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'providerId': serializer.toJson<int>(providerId),
+      'selectedAt': serializer.toJson<DateTime>(selectedAt),
+    };
+  }
+
+  UserFinancialSource copyWith(
+          {int? id, int? providerId, DateTime? selectedAt}) =>
+      UserFinancialSource(
+        id: id ?? this.id,
+        providerId: providerId ?? this.providerId,
+        selectedAt: selectedAt ?? this.selectedAt,
+      );
+  UserFinancialSource copyWithCompanion(UserFinancialSourcesCompanion data) {
+    return UserFinancialSource(
+      id: data.id.present ? data.id.value : this.id,
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+      selectedAt:
+          data.selectedAt.present ? data.selectedAt.value : this.selectedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('UserFinancialSource(')
+          ..write('id: $id, ')
+          ..write('providerId: $providerId, ')
+          ..write('selectedAt: $selectedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, providerId, selectedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is UserFinancialSource &&
+          other.id == this.id &&
+          other.providerId == this.providerId &&
+          other.selectedAt == this.selectedAt);
+}
+
+class UserFinancialSourcesCompanion
+    extends UpdateCompanion<UserFinancialSource> {
+  final Value<int> id;
+  final Value<int> providerId;
+  final Value<DateTime> selectedAt;
+  const UserFinancialSourcesCompanion({
+    this.id = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.selectedAt = const Value.absent(),
+  });
+  UserFinancialSourcesCompanion.insert({
+    this.id = const Value.absent(),
+    required int providerId,
+    this.selectedAt = const Value.absent(),
+  }) : providerId = Value(providerId);
+  static Insertable<UserFinancialSource> custom({
+    Expression<int>? id,
+    Expression<int>? providerId,
+    Expression<DateTime>? selectedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (providerId != null) 'provider_id': providerId,
+      if (selectedAt != null) 'selected_at': selectedAt,
+    });
+  }
+
+  UserFinancialSourcesCompanion copyWith(
+      {Value<int>? id, Value<int>? providerId, Value<DateTime>? selectedAt}) {
+    return UserFinancialSourcesCompanion(
+      id: id ?? this.id,
+      providerId: providerId ?? this.providerId,
+      selectedAt: selectedAt ?? this.selectedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<int>(providerId.value);
+    }
+    if (selectedAt.present) {
+      map['selected_at'] = Variable<DateTime>(selectedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('UserFinancialSourcesCompanion(')
+          ..write('id: $id, ')
+          ..write('providerId: $providerId, ')
+          ..write('selectedAt: $selectedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -3408,6 +4103,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $AccountsTable accounts = $AccountsTable(this);
   late final $MerchantsTable merchants = $MerchantsTable(this);
   late final $TransferLinksTable transferLinks = $TransferLinksTable(this);
+  late final $UserProfileTable userProfile = $UserProfileTable(this);
+  late final $UserFinancialSourcesTable userFinancialSources =
+      $UserFinancialSourcesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -3422,7 +4120,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         smsMessages,
         accounts,
         merchants,
-        transferLinks
+        transferLinks,
+        userProfile,
+        userFinancialSources
       ];
 }
 
@@ -5152,6 +5852,365 @@ typedef $$TransferLinksTableProcessedTableManager = ProcessedTableManager<
     ),
     TransferLink,
     PrefetchHooks Function()>;
+typedef $$UserProfileTableCreateCompanionBuilder = UserProfileCompanion
+    Function({
+  Value<int> id,
+  Value<String?> displayName,
+  Value<String?> email,
+  Value<String?> phone,
+  Value<String?> avatarPath,
+  Value<bool> appLockEnabled,
+  Value<DateTime?> onboardingCompletedAt,
+  Value<DateTime> createdAt,
+});
+typedef $$UserProfileTableUpdateCompanionBuilder = UserProfileCompanion
+    Function({
+  Value<int> id,
+  Value<String?> displayName,
+  Value<String?> email,
+  Value<String?> phone,
+  Value<String?> avatarPath,
+  Value<bool> appLockEnabled,
+  Value<DateTime?> onboardingCompletedAt,
+  Value<DateTime> createdAt,
+});
+
+class $$UserProfileTableFilterComposer
+    extends Composer<_$AppDatabase, $UserProfileTable> {
+  $$UserProfileTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get email => $composableBuilder(
+      column: $table.email, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get avatarPath => $composableBuilder(
+      column: $table.avatarPath, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get appLockEnabled => $composableBuilder(
+      column: $table.appLockEnabled,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get onboardingCompletedAt => $composableBuilder(
+      column: $table.onboardingCompletedAt,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$UserProfileTableOrderingComposer
+    extends Composer<_$AppDatabase, $UserProfileTable> {
+  $$UserProfileTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get email => $composableBuilder(
+      column: $table.email, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get avatarPath => $composableBuilder(
+      column: $table.avatarPath, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get appLockEnabled => $composableBuilder(
+      column: $table.appLockEnabled,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get onboardingCompletedAt => $composableBuilder(
+      column: $table.onboardingCompletedAt,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$UserProfileTableAnnotationComposer
+    extends Composer<_$AppDatabase, $UserProfileTable> {
+  $$UserProfileTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => column);
+
+  GeneratedColumn<String> get email =>
+      $composableBuilder(column: $table.email, builder: (column) => column);
+
+  GeneratedColumn<String> get phone =>
+      $composableBuilder(column: $table.phone, builder: (column) => column);
+
+  GeneratedColumn<String> get avatarPath => $composableBuilder(
+      column: $table.avatarPath, builder: (column) => column);
+
+  GeneratedColumn<bool> get appLockEnabled => $composableBuilder(
+      column: $table.appLockEnabled, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get onboardingCompletedAt => $composableBuilder(
+      column: $table.onboardingCompletedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$UserProfileTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $UserProfileTable,
+    UserProfileData,
+    $$UserProfileTableFilterComposer,
+    $$UserProfileTableOrderingComposer,
+    $$UserProfileTableAnnotationComposer,
+    $$UserProfileTableCreateCompanionBuilder,
+    $$UserProfileTableUpdateCompanionBuilder,
+    (
+      UserProfileData,
+      BaseReferences<_$AppDatabase, $UserProfileTable, UserProfileData>
+    ),
+    UserProfileData,
+    PrefetchHooks Function()> {
+  $$UserProfileTableTableManager(_$AppDatabase db, $UserProfileTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$UserProfileTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$UserProfileTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$UserProfileTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String?> displayName = const Value.absent(),
+            Value<String?> email = const Value.absent(),
+            Value<String?> phone = const Value.absent(),
+            Value<String?> avatarPath = const Value.absent(),
+            Value<bool> appLockEnabled = const Value.absent(),
+            Value<DateTime?> onboardingCompletedAt = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              UserProfileCompanion(
+            id: id,
+            displayName: displayName,
+            email: email,
+            phone: phone,
+            avatarPath: avatarPath,
+            appLockEnabled: appLockEnabled,
+            onboardingCompletedAt: onboardingCompletedAt,
+            createdAt: createdAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String?> displayName = const Value.absent(),
+            Value<String?> email = const Value.absent(),
+            Value<String?> phone = const Value.absent(),
+            Value<String?> avatarPath = const Value.absent(),
+            Value<bool> appLockEnabled = const Value.absent(),
+            Value<DateTime?> onboardingCompletedAt = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+          }) =>
+              UserProfileCompanion.insert(
+            id: id,
+            displayName: displayName,
+            email: email,
+            phone: phone,
+            avatarPath: avatarPath,
+            appLockEnabled: appLockEnabled,
+            onboardingCompletedAt: onboardingCompletedAt,
+            createdAt: createdAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$UserProfileTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $UserProfileTable,
+    UserProfileData,
+    $$UserProfileTableFilterComposer,
+    $$UserProfileTableOrderingComposer,
+    $$UserProfileTableAnnotationComposer,
+    $$UserProfileTableCreateCompanionBuilder,
+    $$UserProfileTableUpdateCompanionBuilder,
+    (
+      UserProfileData,
+      BaseReferences<_$AppDatabase, $UserProfileTable, UserProfileData>
+    ),
+    UserProfileData,
+    PrefetchHooks Function()>;
+typedef $$UserFinancialSourcesTableCreateCompanionBuilder
+    = UserFinancialSourcesCompanion Function({
+  Value<int> id,
+  required int providerId,
+  Value<DateTime> selectedAt,
+});
+typedef $$UserFinancialSourcesTableUpdateCompanionBuilder
+    = UserFinancialSourcesCompanion Function({
+  Value<int> id,
+  Value<int> providerId,
+  Value<DateTime> selectedAt,
+});
+
+class $$UserFinancialSourcesTableFilterComposer
+    extends Composer<_$AppDatabase, $UserFinancialSourcesTable> {
+  $$UserFinancialSourcesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get selectedAt => $composableBuilder(
+      column: $table.selectedAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$UserFinancialSourcesTableOrderingComposer
+    extends Composer<_$AppDatabase, $UserFinancialSourcesTable> {
+  $$UserFinancialSourcesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get selectedAt => $composableBuilder(
+      column: $table.selectedAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$UserFinancialSourcesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $UserFinancialSourcesTable> {
+  $$UserFinancialSourcesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get providerId => $composableBuilder(
+      column: $table.providerId, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get selectedAt => $composableBuilder(
+      column: $table.selectedAt, builder: (column) => column);
+}
+
+class $$UserFinancialSourcesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $UserFinancialSourcesTable,
+    UserFinancialSource,
+    $$UserFinancialSourcesTableFilterComposer,
+    $$UserFinancialSourcesTableOrderingComposer,
+    $$UserFinancialSourcesTableAnnotationComposer,
+    $$UserFinancialSourcesTableCreateCompanionBuilder,
+    $$UserFinancialSourcesTableUpdateCompanionBuilder,
+    (
+      UserFinancialSource,
+      BaseReferences<_$AppDatabase, $UserFinancialSourcesTable,
+          UserFinancialSource>
+    ),
+    UserFinancialSource,
+    PrefetchHooks Function()> {
+  $$UserFinancialSourcesTableTableManager(
+      _$AppDatabase db, $UserFinancialSourcesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$UserFinancialSourcesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$UserFinancialSourcesTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$UserFinancialSourcesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<int> providerId = const Value.absent(),
+            Value<DateTime> selectedAt = const Value.absent(),
+          }) =>
+              UserFinancialSourcesCompanion(
+            id: id,
+            providerId: providerId,
+            selectedAt: selectedAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required int providerId,
+            Value<DateTime> selectedAt = const Value.absent(),
+          }) =>
+              UserFinancialSourcesCompanion.insert(
+            id: id,
+            providerId: providerId,
+            selectedAt: selectedAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$UserFinancialSourcesTableProcessedTableManager
+    = ProcessedTableManager<
+        _$AppDatabase,
+        $UserFinancialSourcesTable,
+        UserFinancialSource,
+        $$UserFinancialSourcesTableFilterComposer,
+        $$UserFinancialSourcesTableOrderingComposer,
+        $$UserFinancialSourcesTableAnnotationComposer,
+        $$UserFinancialSourcesTableCreateCompanionBuilder,
+        $$UserFinancialSourcesTableUpdateCompanionBuilder,
+        (
+          UserFinancialSource,
+          BaseReferences<_$AppDatabase, $UserFinancialSourcesTable,
+              UserFinancialSource>
+        ),
+        UserFinancialSource,
+        PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -5176,4 +6235,8 @@ class $AppDatabaseManager {
       $$MerchantsTableTableManager(_db, _db.merchants);
   $$TransferLinksTableTableManager get transferLinks =>
       $$TransferLinksTableTableManager(_db, _db.transferLinks);
+  $$UserProfileTableTableManager get userProfile =>
+      $$UserProfileTableTableManager(_db, _db.userProfile);
+  $$UserFinancialSourcesTableTableManager get userFinancialSources =>
+      $$UserFinancialSourcesTableTableManager(_db, _db.userFinancialSources);
 }

@@ -46,6 +46,11 @@ dependencies:
   # SHA-256 hashing for SMS dedup keys (lib/data/database.dart hashSmsMessage).
   crypto: ^3.0.3
 
+  # Biometric/PIN/pattern app lock (spec Phase 5 Security Setup, Phase 7
+  # Settings). On-device hardware/OS prompt only — no network involved,
+  # same category as permission_handler above.
+  local_auth: ^2.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

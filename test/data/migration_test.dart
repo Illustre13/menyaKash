@@ -104,4 +104,137 @@ void main() {
     final providers = await db.select(db.financialProviders).get();
     expect(providers, isNotEmpty);
   });
+
+  /// Verifies the v3 -> v4 grandfather path: a pre-Phase-5 install that
+  /// already has real Accounts (from the old unconditional
+  /// _seedDefaultAccounts) must land on Dashboard directly after the
+  /// upgrade, not be forced through the new onboarding flow — see
+  /// AppDatabase._grandfatherExistingUsers.
+  test('an existing user with real accounts is grandfathered as already-onboarded on v3->v4',
+      () async {
+    final raw = sqlite3.sqlite3.openInMemory();
+
+    // Minimal v3 schema: only what _grandfatherExistingUsers actually
+    // reads (accounts + financial_providers) plus the tables drift's
+    // own onUpgrade touches along the way. Real column set, not a v1
+    // schema — this is deliberately testing the v3->v4 step in
+    // isolation, same as the v1->v2 test above tests that step alone.
+    raw.execute('''
+      CREATE TABLE categories (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+      );
+      CREATE TABLE category_codes (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL,
+        display_name TEXT,
+        category_id INTEGER NOT NULL REFERENCES categories(id)
+      );
+      CREATE TABLE financial_providers (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        category TEXT NOT NULL
+      );
+      CREATE TABLE provider_senders (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        sender_pattern TEXT NOT NULL,
+        provider_id INTEGER NOT NULL REFERENCES financial_providers(id)
+      );
+      CREATE TABLE sms_messages (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        sender TEXT NOT NULL,
+        body TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        sms_hash TEXT NOT NULL,
+        provider_id INTEGER REFERENCES financial_providers(id),
+        processing_status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE accounts (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        provider_id INTEGER NOT NULL REFERENCES financial_providers(id),
+        label TEXT NOT NULL
+      );
+      CREATE TABLE merchants (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        category_id INTEGER REFERENCES categories(id)
+      );
+      CREATE TABLE transfer_links (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        from_transaction_id INTEGER NOT NULL,
+        to_transaction_id INTEGER NOT NULL,
+        confidence TEXT NOT NULL,
+        match_reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE transactions (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        sms_message_id INTEGER REFERENCES sms_messages(id),
+        provider_id INTEGER REFERENCES financial_providers(id),
+        account_id INTEGER REFERENCES accounts(id),
+        merchant_id INTEGER REFERENCES merchants(id),
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        fee REAL NOT NULL DEFAULT 0,
+        counterparty TEXT,
+        tx_ref TEXT,
+        balance_after REAL,
+        timestamp INTEGER NOT NULL,
+        raw_sms_body TEXT NOT NULL,
+        category_id INTEGER REFERENCES categories(id)
+      );
+      CREATE TABLE unparsed_messages (
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+        sms_message_id INTEGER REFERENCES sms_messages(id),
+        sender TEXT NOT NULL,
+        body TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0
+      );
+
+      PRAGMA user_version = 3;
+    ''');
+
+    raw.execute('''
+      INSERT INTO financial_providers (id, code, display_name, category)
+      VALUES (1, 'mtn_momo_rw', 'MTN Mobile Money', 'mobile_money');
+    ''');
+    raw.execute('''
+      INSERT INTO accounts (id, provider_id, label)
+      VALUES (1, 1, 'My MTN Mobile Money');
+    ''');
+
+    final db = AppDatabase.forTesting(NativeDatabase.opened(raw));
+    addTearDown(db.close);
+
+    // Touch the database to force drift to run the v3 -> v4 migration.
+    await db.select(db.categories).get();
+
+    final profile = await db.select(db.userProfile).getSingleOrNull();
+    expect(profile, isNotNull, reason: 'an existing user with real accounts must be grandfathered');
+    expect(profile!.onboardingCompletedAt, isNotNull,
+        reason: 'must never be forced back through onboarding retroactively');
+
+    final sources = await db.select(db.userFinancialSources).get();
+    expect(sources, hasLength(1));
+    expect(sources.single.providerId, 1,
+        reason: 'Connected Services must reflect the provider the existing account already used');
+  });
+
+  test('a fresh v4 install has zero accounts until a provider is explicitly selected', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await db.select(db.categories).get();
+
+    final accounts = await db.select(db.accounts).get();
+    expect(accounts, isEmpty,
+        reason: 'schemaVersion 4 no longer auto-seeds an account for every provider on create');
+
+    final profile = await db.select(db.userProfile).getSingleOrNull();
+    expect(profile, isNull, reason: 'onCreate must not fabricate a profile for a genuinely new user');
+  });
 }

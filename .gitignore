@@ -51,3 +51,4 @@ app.*.map.json
 # Local-only planning docs and personal data exports — never committed
 /public
 /docs/PHASE_COMMIT_PLAN.md
+/docs/PHASE_05_07.md

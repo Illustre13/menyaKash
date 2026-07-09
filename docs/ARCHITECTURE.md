@@ -200,40 +200,36 @@ just now lives inside each `MomoParser.tryParse` as before.
 
 ## 4a. Initial setup — onboarding + full-history ingestion
 
+As of Phases 5-7, onboarding is a six-step flow (`OnboardingFlowScreen`)
+rather than the single SMS-permission screen this diagram originally
+described — see §8c for the full flow and why SMS setup now runs last
+instead of first. The historical-scan mechanics below are unchanged:
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
     participant Home as HomeShell
-    participant OB as OnboardingScreen
+    participant SMS as SmsSetupScreen
     participant Ingest as SmsIngestService
-    participant DB as AppDatabase
 
-    Home->>Ingest: hasPermissions()?
-    alt already granted (returning user)
-        Ingest-->>Home: true
-        Home->>Ingest: startLiveListener()
-        Home->>U: go straight to Dashboard
-    else first run
-        Ingest-->>Home: false
-        Home->>OB: show OnboardingScreen
-        OB->>U: explain on-device-only SMS access
-        U->>OB: taps Continue
-        OB->>Ingest: requestPermissions()
-        alt permission denied
-            Ingest-->>OB: false
-            OB->>U: show retry screen
-        else permission granted
-            Ingest-->>OB: true
-            OB->>Ingest: scanHistoricalInbox() [stream]
-            loop for each message in inbox
-                Ingest-->>OB: ScanProgress(processed, total, matched)
-                OB->>U: update progress UI
-            end
-            Ingest->>Ingest: startLiveListener()
-            OB->>Home: onComplete()
-            Home->>U: go to Dashboard — full history already loaded
+    Note over U,Home: By this point the user has already completed<br/>Welcome, Terms, Account Setup, Security Setup,<br/>and Provider Selection (§8c) — this is step 6 of 6.
+    SMS->>U: explain on-device-only SMS access
+    U->>SMS: taps Continue
+    SMS->>Ingest: requestPermissions()
+    alt permission denied
+        Ingest-->>SMS: false
+        SMS->>U: show retry screen
+    else permission granted
+        Ingest-->>SMS: true
+        SMS->>Ingest: scanHistoricalInbox() [stream]
+        loop for each message in inbox
+            Ingest-->>SMS: ScanProgress(processed, total, matched)
+            SMS->>U: update progress UI
         end
+        Ingest->>Ingest: startLiveListener()
+        SMS->>Home: onComplete()
+        Home->>U: go to Dashboard — full history already loaded
     end
 ```
 
@@ -241,6 +237,9 @@ sequenceDiagram
 `Future<int>` specifically so the onboarding screen can render live
 counts instead of an indeterminate spinner while potentially thousands
 of messages are scanned.
+
+A returning user's "already onboarded?" check (`HomeShell`) no longer
+depends on this screen's permission state at all — see §8c.
 
 ## 5. Sequence — categorizing a new merchant code, with bulk-similar
 
@@ -706,13 +705,130 @@ collapses casing/punctuation/whitespace so "Family Bakery Ltd" and
 This is added **alongside**, not in place of, the existing
 `CategoryCodes`-based flow — every `Transactions` row `SmsProcessor`
 writes now also gets a `merchantId` (via `MerchantNormalizationService`)
-and an `accountId` (via `AccountsService.defaultAccountForProvider`), but
+and an `accountId` (via `AccountsService.ensureAccountForProvider` —
+see §8c for why this changed from a lookup-only method once Phases 5-7
+made `Accounts` creation conditional on user selection), but
 the Categorize/Pay/Frequent-codes screens still read from `counterparty`
 
 + `CategoryCodes` exactly as before. Wiring those screens over to query
   `Merchants` instead is a deliberately separate follow-up — this phase
   built and tested the correct plumbing without risking the already-shipped
   UI in the same change.
+
+## 8c. Onboarding redesign, provider setup, profile & settings (Phases 5-7)
+
+**The offline mandate meets a spec written for a networked app.** The
+original spec for this work asked for email/SMS OTP verification during
+onboarding and a "Sync Settings" entry in the Data section. Both imply
+an outbound network call — a mail relay or SMS gateway for OTP delivery,
+a remote counterpart for sync — which directly contradicts this app's
+architectural mandate: no `INTERNET` permission is declared anywhere,
+and no network-capable package (`http`, `dio`, any OTP/SMS-gateway SDK)
+exists in `pubspec.yaml`. Two resolutions, both decided explicitly with
+the user rather than built silently or dropped silently:
+
+1. **Email confirmation, not real OTP delivery.** `AccountSetupScreen`
+   generates a random 6-digit code and displays it on the device's own
+   screen; the user re-types it to confirm. Nothing is ever sent
+   anywhere — there is no real inbox-ownership proof happening, only a
+   typo/attention check, and the screen's copy says so explicitly
+   ("This code was generated on your device... it was not sent
+   anywhere") rather than implying real delivery. A **Skip** button is
+   always available and moves straight to Security Setup. Phone-number
+   verification is explicitly out of scope for this pass.
+2. **"Sync Settings" → "Local Backup."** `SettingsScreen`'s Data section
+   reframes this as export/import of a local backup file via device
+   storage only. The label and every related identifier say "backup,"
+   never "sync," so nothing in the UI or code implies a network
+   capability that doesn't exist. (Export Statement / Backup SMS /
+   Local Backup are currently stubbed with a "coming soon" message —
+   the schema and services this phase added don't yet include file
+   export logic; building that is separate follow-up work.)
+
+**Onboarding flow.** `OnboardingFlowScreen` replaces the old
+single-purpose `OnboardingScreen` with six steps: Welcome → Terms &
+Privacy → Account Setup → Security Setup → Provider Selection → SMS
+Setup (§4a). Each step persists its own result immediately (via
+`UserProfileService`/`ProviderSelectionService`) rather than threading
+state through every screen to write once at the end, so a user who
+force-quits mid-flow doesn't lose earlier steps on next launch. SMS
+setup — the most sensitive permission ask — deliberately runs last,
+after identity and security setup have established some trust, rather
+than first as it did before this phase.
+
+**Two new tables**, `UserProfile` (the single local identity — name,
+email, phone, `avatarPath`, `appLockEnabled`, `onboardingCompletedAt`)
+and `UserFinancialSources` (which `FinancialProviders` rows the user has
+explicitly selected). Neither existed before Phase 5; `UserProfile` has
+no password/credential column of any kind — `appLockEnabled` gates
+access via the OS's own biometric/PIN/pattern prompt (`local_auth`),
+never a secret this app stores or checks itself.
+
+```mermaid
+flowchart LR
+    subgraph Before["Before Phase 6"]
+        A["AppDatabase.onCreate"] --> B["_seedDefaultAccounts()\nunconditional: one Accounts row\nper EVERY FinancialProviders row"]
+    end
+    subgraph After["From schemaVersion 4"]
+        C["User selects providers\n(ProviderSelectionScreen / Settings)"] --> D["UserFinancialSources row written"]
+        D --> E["AccountsService.ensureAccountForProvider()"]
+        E --> F["Accounts row created\n— only for selected providers"]
+        G["SmsProcessor matches a real\ntransaction for provider X"] --> E
+    end
+```
+
+**`Accounts` creation is now selection-driven, not automatic** — this
+is a real behavior change, not additive plumbing like Phase 4's
+`Merchants` table was. `_seedDefaultAccounts()` (the old unconditional
+one-row-per-provider seed) is kept only for the v3→v4 migration's
+grandfather path (below); a fresh install's `onCreate` no longer calls
+it at all. The new gate is `AccountsService.ensureAccountForProvider`,
+called from two places:
+
+- `ProviderSelectionService.selectProviders` — the explicit path, when
+  a user picks a provider on the onboarding screen or in Settings.
+- `SmsProcessor._processOne` — a real matched transaction for a
+  provider is itself sufficient evidence the user uses it, so an
+  account is created on demand rather than the transaction being
+  written with a null `accountId`. This was a genuine bug caught while
+  wiring this phase: `SmsProcessor` originally still called the
+  lookup-only `defaultAccountForProvider`, which now correctly returns
+  null for any provider the user hasn't gotten to yet in the setup
+  screen — silently orphaning every one of that provider's real
+  transactions until the user happened to select it.
+
+Deselecting a provider later (Settings' "Connected Services" toggle)
+removes only the `UserFinancialSources` row — it never deletes the
+`Accounts` row or touches `Transactions`, since a user's real history
+must survive them turning a provider card off.
+
+**Migration (schemaVersion 3 → 4).** `onUpgrade`'s `from < 4` block
+creates both new tables, then grandfathers existing users: any pre-v4
+install already has `Accounts` rows (from the old unconditional seed),
+so rather than force them back through the new six-step flow, one
+`UserProfile` row is inserted with `onboardingCompletedAt` already set,
+and `UserFinancialSources` is backfilled from whatever providers those
+existing accounts already reference — so Settings' Connected Services
+correctly shows their real existing usage as pre-selected instead of
+everything appearing off. `HomeShell`'s "already onboarded?" check
+changed accordingly: from "is SMS permission currently granted"
+(a proxy that conflated permission state with setup completion) to
+"does `UserProfile.onboardingCompletedAt` exist" — a returning user who
+denies SMS access is no longer forced to repeat the whole onboarding
+flow every launch, only the SMS step itself.
+
+**Profile & Settings (Phase 7).** Not a fifth bottom-nav destination —
+an infrequent destination doesn't warrant crowding the existing
+four-item bar. `DashboardScreen`'s `AppBar` gained a person-icon action
+that pushes `ProfileScreen` as a full route. `ProfileScreen` shows
+identity fields, a Security shortcut into `SettingsScreen`, and
+Connected Accounts (reusing `AccountsService.allAccountSummaries()` and
+`renameAccount`, both of which already existed from Phase 3 but had no
+UI entry point until now). The spec's Profile "Subscription" row is
+omitted entirely — there is no billing/IAP system anywhere in this
+offline app, and a fake static badge for a feature that doesn't exist
+isn't worth the maintenance surface until a real premium feature
+(later phase) needs one.
 
 ## 9. USSD quick-dial flow (no session automation)
 
@@ -757,4 +873,8 @@ sequenceDiagram
 | Transfer matching as an explicit batch stage, not inline per-message (Phase 3.1)           | Check for a transfer match immediately inside`SmsProcessor` as each message is written | The matching counterpart of a transfer may not have arrived yet when the first side is processed (real evidence: the two sides of the same transfer arrived via different SMS, seconds apart) — a batch pass after ingestion is the only ordering that can see both sides reliably                                                                     |
 | `TransferLinks` connects two `Transactions` rows; never merges or deletes either       | Replace both rows with one synthetic "transfer" transaction                              | Each row is the real evidence of what its own provider actually reported (its own txRef, its own exact wording) — collapsing them into one synthetic row would destroy that evidence for the sake of a slightly simpler analytics query                                                                                                                |
 | `Merchants` added alongside `CategoryCodes`, existing screens left untouched (Phase 4) | Migrate Categorize/Pay/Frequent-codes screens to`Merchants` in the same change         | The categorization bug (merchant name + code stored as one opaque string) is real and confirmed, but the existing screens already work correctly against`CategoryCodes` today; introducing new plumbing and rewiring working, shipped UI in one change multiplies the blast radius of any mistake for no compounding benefit                          |
+| On-screen generated code instead of real email/SMS OTP delivery (Phase 5) | Add an `http`/OTP-gateway dependency to actually send codes | Directly violates the no-`INTERNET`-permission architectural mandate; a locally-generated, on-screen-displayed code preserves the code-entry UX shape while being honest that nothing is verified remotely |
+| "Local Backup" (export/import a file) instead of "Sync Settings" (Phase 7) | Build a real sync mechanism, or keep the "Sync" label with no backing feature | The spec's wording implies a remote counterpart this app cannot have by design; renaming to match what the feature actually does (a local file) avoids a label that lies about capability |
+| `Accounts` created only for user-selected providers, not auto-seeded for every registry row (Phase 6) | Keep the old unconditional one-account-per-provider seed and treat provider selection as purely cosmetic | The spec's "Select Financial Providers" screen should mean something — an unconditional seed would make the selection UI a no-op; the tradeoff is `SmsProcessor` must create an account on demand (`ensureAccountForProvider`) for any provider with a real matched transaction, so a user's actual usage is never silently orphaned even if they haven't visited the selection screen for that provider yet |
+| Each onboarding step persists immediately, not just at flow completion (Phase 5) | Thread all onboarding state through to one write at the final step | A user who force-quits mid-flow (e.g. after Account Setup but before Provider Selection) keeps what they already entered on next launch instead of losing it and starting over |
 | Trailing-4+-digit-code stripping as the merchant/code split heuristic                      | Split on the last whitespace-separated token unconditionally                             | A trailing short number (1-3 digits) is more likely to be part of a name (e.g. a unit number) than an account code in the confirmed real examples; a 4-digit floor matches every real code observed (`096957`, `902850`, `08077`, `20231`) without over-stripping shorter tokens                                                                |

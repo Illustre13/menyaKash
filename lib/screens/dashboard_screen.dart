@@ -2,15 +2,28 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../accounts/accounts_service.dart';
 import '../analytics/analytics_service.dart';
 import '../analytics/chart_palette.dart';
 import '../analytics/period.dart';
+import '../profile/user_profile_service.dart';
+import '../providers/provider_selection_service.dart';
 import '../theme/app_theme.dart';
+import 'profile/profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key, required this.analytics});
+  const DashboardScreen({
+    super.key,
+    required this.analytics,
+    required this.profileService,
+    required this.accountsService,
+    required this.providerSelectionService,
+  });
 
   final AnalyticsService analytics;
+  final UserProfileService profileService;
+  final AccountsService accountsService;
+  final ProviderSelectionService providerSelectionService;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -69,7 +82,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final canGoNext = !_period.containsCurrent(DateTime.now());
 
     return Scaffold(
-      appBar: AppBar(title: const BrandMark(compact: true)),
+      appBar: AppBar(
+        title: const BrandMark(compact: true),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            tooltip: 'Profile',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ProfileScreen(
+                  profileService: widget.profileService,
+                  accountsService: widget.accountsService,
+                  providerSelectionService: widget.providerSelectionService,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: ListView(

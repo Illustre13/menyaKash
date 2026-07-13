@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// i-momo brand system — matches the logo (purple "i" swoosh with an
-/// orange accent dot and upward arrow, see logo.svg/logo.png/favicon.ico
-/// in the project root).
+/// Menya Cash brand system — matches the logo (purple "i" swoosh with an
+/// orange accent dot and upward arrow, see assets/brand/menyacash.svg,
+/// menyacash.png, menyacash.ico).
 ///
 /// Every color below was checked against WCAG contrast before being
 /// chosen — see the design notes in docs/ARCHITECTURE.md §Brand. Chart
@@ -154,8 +154,8 @@ class AppTheme {
 }
 
 /// A small branded header used at the top of primary screens — the
-/// logo mark (assets/brand/logo.png) plus the wordmark. Keeps the brand
-/// present without repeating a heavy hero banner on every screen.
+/// logo mark (assets/brand/menyacash.png) plus the wordmark. Keeps the
+/// brand present without repeating a heavy hero banner on every screen.
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.compact = false});
 
@@ -168,10 +168,10 @@ class BrandMark extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Image.asset('assets/brand/logo.png', height: logoHeight),
+        Image.asset('assets/brand/menyacash.png', height: logoHeight),
         SizedBox(width: compact ? 8 : 10),
         Text(
-          'i-momo',
+          'Menya Cash',
           style: TextStyle(
             fontSize: compact ? 16 : 20,
             fontWeight: FontWeight.w800,

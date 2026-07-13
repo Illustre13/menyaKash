@@ -1,11 +1,11 @@
 {
-    "name": "i-momo",
-    "short_name": "i-momo",
+    "name": "Menya Cash",
+    "short_name": "Menya Cash",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#FCFCFB",
     "theme_color": "#7F56D9",
-    "description": "i-momo — offline mobile money spending tracker (web dev preview).",
+    "description": "Menya Cash — offline mobile money spending tracker (web dev preview).",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

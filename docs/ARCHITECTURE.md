@@ -830,28 +830,218 @@ offline app, and a fake static badge for a feature that doesn't exist
 isn't worth the maintenance surface until a real premium feature
 (later phase) needs one.
 
+## 8d. Dashboard redesign (Phase 8)
+
+`DashboardScreen` gained three sections, each extracted to its own file
+under `lib/screens/dashboard/` (mirrors the `lib/screens/profile/`
+sub-folder convention):
+
+- **Overview Card** (`overview_card.dart`) — total balance summed
+  across every `AccountSummary.currentBalance`. Sums only non-null
+  balances and shows an explicit caption when any account's balance is
+  unknown (e.g. Equity's real SMS never reports a running balance —
+  see docs/SMS_PATTERN_LIBRARY.md) rather than silently treating null
+  as zero, which would understate the real total without saying so.
+- **Wallet Breakdown** (`wallet_breakdown.dart`) — one row per account.
+  Wires `AccountsService.allAccountSummaries()` into the dashboard for
+  the first time; that method already existed correctly since Phase 3
+  but was never called from any screen until now.
+- **Categorization progress** (`categorization_progress.dart`) — "X%
+  categorized / Y need review," replacing the old plain "All
+  Uncategorized" framing. Backed by a new
+  `AnalyticsService.categorizationRatio({Period? period})`, which
+  counts **transactions**, not summed amounts — the spec's own framing
+  describes a review workload ("how many taps are left"), not a spend
+  magnitude, so one large uncategorized rent payment shouldn't look
+  worse than ten small uncategorized purchases. Deliberately includes
+  transfer-linked transactions in the denominator (unlike
+  `summary`/`spendByCategory`, which exclude them) — a transfer never
+  needs a spending category, but it's still a real ledger row that
+  should count toward "how much of my data is triaged." Tapping the
+  bar (when anything needs review) switches to the Categorize tab via
+  a `HomeShell`-owned callback, since `DashboardScreen` doesn't own the
+  bottom-nav index itself.
+
+Both the Overview Card and Wallet Breakdown read "now" data
+(`allAccountSummaries()`), independent of the dashboard's week/month/
+quarter/year period selector — wallet balances don't reset each
+period the way spend totals do, so they're placed above the period
+controls rather than inside the period-scoped section.
+
 ## 9. USSD quick-dial flow (no session automation)
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
-    participant Screen as UssdScreen
+    participant Screen as PayScreen
+    participant Norm as PhoneNormalizer
     participant Builder as UssdBuilder
     participant Dialer as UssdDialer
     participant OS as Native Android Dialer
 
-    U->>Screen: selects action (Send / Pay / Airtime / Balance) + fills fields
-    U->>Screen: taps "Open dialer"
-    Screen->>Builder: sendMoney(phone, amount) etc.
-    Builder-->>Screen: "*182*1*1*<phone>*<amount>#"
+    U->>Screen: picks a recipient (contact / frequent code / manual) + amount
+    U->>Screen: taps "Open dialer to pay"
+    alt merchant/till payment
+        Screen->>Builder: payMerchant(tillCode, amount)
+    else phone recipient
+        Screen->>Norm: normalizeRwandanMobile(rawRecipient)
+        alt not a valid Rwandan number
+            Norm-->>Screen: null
+            Screen->>U: show error, do not dial
+        else valid
+            Norm-->>Screen: canonical 0XXXXXXXXX
+            Screen->>Builder: sendMoney(normalizedPhone, amount)
+        end
+    end
+    Builder-->>Screen: "*182*1*1*<phone>*<amount>#" (assert-guarded)
     Screen->>Dialer: dial(ussdCode)
     Dialer->>OS: launchUrl(tel:*182*1*1*...#)
     OS-->>U: dialer opens, code prefilled
     Note over U,OS: User manually confirms/sends.<br/>App never reads the USSD response<br/>or automates the session (no Accessibility Service).
 ```
 
-## 10. Why these tradeoffs
+## 9a. Pay/USSD phone-normalization fix (Phase 9)
+
+**Confirmed real bug, root cause.** A reported broken dialer code —
+`*182*8*1*627434673883892627492*100#` — traced to **two** distinct
+gaps, both now fixed:
+
+1. **No normalization anywhere in the recipient path.** The contact
+   picker (`ContactsService.loadContactsWithPhoneNumbers`) only did
+   `.trim()`; manual entry and frequent-code selection did nothing at
+   all. A malformed or merged Android contact record (common when a
+   contact is synced from multiple accounts — WhatsApp, SIM, Google)
+   could reach `UssdBuilder.sendMoney` completely unsanitized.
+2. **The Frequent-code picker hardcoded `_isMerchantPayment = true`
+   for every selection** (`pay_screen.dart`), regardless of whether the
+   selected code was actually a merchant till code or a free-text P2P
+   counterparty string (`CodeUsage.code` is `Transactions.counterparty`
+   verbatim — for a person-to-person transfer, that's a phone-shaped
+   string, not a till code). Forcing the `payMerchant` path
+   (`*182*8*1*...#` — the exact prefix in the reported bug) for a
+   phone-shaped code sent an unvalidated string down the wrong builder
+   method entirely.
+
+**Fix.** New `lib/ussd/phone_normalizer.dart`: `PhoneNormalizer` (one
+owner, static methods matching `UssdBuilder`'s style) recognizes the
+real Rwandan mobile shapes (`0XXXXXXXXX`, 9-digit with no leading 0,
+`+250XXXXXXXXX`, `250XXXXXXXXX`) and returns the canonical 10-digit
+form, or `null` for anything else — including the actual reported
+garbage string. `PayScreen._pay()` is the one place all three
+`_PayTarget` paths converge before dialing, so it's the single
+normalization call site: on `null`, a snackbar error is shown and
+nothing is dialed. The Frequent-code picker's merchant-vs-phone
+decision now checks `PhoneNormalizer.normalizeRwandanMobile(code) ==
+null` instead of assuming merchant unconditionally.
+`UssdBuilder.sendMoney` also gained a defensive `assert` (stripped in
+release, so it can't itself introduce a new release-mode failure path)
+as a second line of guard against any future call site bypassing
+normalization. `ContactsService` itself is deliberately untouched —
+normalizing at load time would hide the real underlying contact data
+from the picker and duplicate the check already done in `_pay()`.
+
+## 10. Performance: the historical SMS scan (Phase 10)
+
+**Confirmed real jank.** "Skipped N frames" during onboarding's
+historical scan, on a real ~8,364-message device inbox. Root cause:
+the entire scan ran on the main isolate — per-message dedup query,
+provider detection (2 DB queries), regex parsing, category lookup,
+account/merchant resolution, an insert, and an update — roughly 6-8
+sequential awaited database round-trips per message, serializing
+against Flutter's event loop for thousands of messages.
+
+**Constraint.** `drift_flutter`'s `driftDatabase()` already runs actual
+SQL execution on drift's own background executor — the jank isn't raw
+query cost, it's the sheer *count* of round-trips plus CPU-bound
+parsing work running directly on the main isolate between them. A new
+isolate can't share the existing `AppDatabase` connection, so database
+writes have to stay on the main isolate; the fix is cutting how much
+work happens per round-trip and moving the CPU work off-thread, not
+relocating the database itself.
+
+```mermaid
+flowchart TB
+    subgraph Main["Main isolate"]
+        A["Snapshot FinancialProviders/ProviderSenders once\n(plain ProviderSnapshot DTOs)"]
+        B["Snapshot existing SmsMessages.smsHash once\n(in-memory Set)"]
+        C["Chunk raw inbox (400 msgs/chunk)"]
+        G["SmsProcessor.processBatch(chunk)\n— one drift transaction per chunk,\naccount/merchant lookups cached per chunk"]
+        H["yield ScanProgress per chunk"]
+    end
+    subgraph Isolate["Background isolate (compute)"]
+        D["parseChunk(): sender-match + regex parse\nper message, using only the snapshots\n— no DB handle, no live service objects"]
+    end
+    A --> C
+    B --> C
+    C -->|"compute(parseChunk, ...)"| D
+    D -->|"List&lt;ParsedSmsResult&gt; (plain data)"| G
+    G --> H
+    H -->|"next chunk"| C
+```
+
+**What moved and what didn't.** Sender-pattern matching, the MTN/eKash
+body disambiguation rule, regex parsing, and SHA-256 hashing (all pure
+CPU work) now run inside `compute(parseChunk, ...)` in
+`lib/sms/isolate_parsing.dart`, using only the `ProviderSnapshot`/
+`RawSmsSnapshot` plain-data types — no drift row, connection, or
+service object ever crosses the isolate boundary, since `compute()`
+requires its argument to be independent of the main isolate's state.
+Database writes stay on the main isolate (a second isolate can't reuse
+`AppDatabase`'s connection) but are restructured: `SmsMessages` rows
+are still inserted individually (not batched) because
+`Transactions.smsMessageId`/`UnparsedMessages.smsMessageId` need each
+row's real generated id to link back to — drift's `batch()` API
+doesn't return per-row ids synchronously, so batching that specific
+insert would silently drop the evidence link the rest of this app
+depends on. The transaction/unparsed-message writes that follow *are*
+batched via `SmsProcessor.processBatch`, since those don't need each
+other's ids — that's where the real round-trip savings come from,
+since those are the two writes that happen once per message. Account
+and merchant resolution are cached per batch call, so repeat lookups
+for the same provider/counterparty within a chunk are free in-memory
+hits after the first.
+
+The live SMS listener (`SmsIngestService.startLiveListener`, one
+message at a time) is untouched — this restructuring only applies to
+the bulk historical scan, where the message count actually makes the
+main-isolate cost visible.
+
+`_scanChunkSize = 400` (messages per `compute()` call) — large enough
+to amortize isolate spawn/message-passing overhead, small enough that
+the progress UI updates roughly every 1-2 seconds of scan time.
+Tuned against the real ~8,364-message export this project has used
+throughout; revisit if on-device profiling suggests otherwise.
+
+## 11. Premium architecture preparation (Phase 11 — prep only)
+
+Per spec, this phase prepares architecture for a future paid Statement
+Export feature without implementing it. New `lib/premium/` module
+(`statement_exporter.dart`): a `StatementFormat` enum (`pdf`, `excel`,
+`csv`), an abstract `StatementExporter` interface with no network
+parameter of any kind by design, and `UnimplementedStatementExporter`
+(throws `UnimplementedError`) so Settings' existing "Export Statement"
+stub (Phase 7) has a real-if-disabled type behind it. No concrete
+`PdfStatementExporter`/etc. and no new `pubspec.yaml` dependency
+(`pdf`/`excel`/`csv`) — those are implementation-phase work, out of
+scope here.
+
+**Cloud SMS Backup prep was dropped entirely**, by explicit user
+decision — not built as an unused interface. The spec's second paid
+feature ("Cloud SMS Backup," encrypted cloud storage of SMS + call
+logs) is a categorical exception to this app's hard no-`INTERNET`-
+permission architecture, the same conflict Phase 5's OTP requirement
+hit. Unlike Phase 5 (where an on-screen, non-delivered confirmation
+code was an honest local substitute preserving the intended UX), there
+is no honest local substitute for "cloud backup" — a local encrypted
+export is a fundamentally different feature (see "Local Backup" in
+Phase 7's Settings), not a stand-in for sync-to-cloud. Rather than
+half-build a `BackupTransport`-shaped interface nobody asked to have
+exist yet, this was scoped out; if a real cloud feature is ever
+pursued, that requires a separate, explicit product conversation, not
+something a prep-only phase should quietly pave the way for.
+
+## 12. Why these tradeoffs
 
 | Decision                                                                                   | Alternative considered                                                                   | Why rejected                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -878,3 +1068,8 @@ sequenceDiagram
 | `Accounts` created only for user-selected providers, not auto-seeded for every registry row (Phase 6) | Keep the old unconditional one-account-per-provider seed and treat provider selection as purely cosmetic | The spec's "Select Financial Providers" screen should mean something — an unconditional seed would make the selection UI a no-op; the tradeoff is `SmsProcessor` must create an account on demand (`ensureAccountForProvider`) for any provider with a real matched transaction, so a user's actual usage is never silently orphaned even if they haven't visited the selection screen for that provider yet |
 | Each onboarding step persists immediately, not just at flow completion (Phase 5) | Thread all onboarding state through to one write at the final step | A user who force-quits mid-flow (e.g. after Account Setup but before Provider Selection) keeps what they already entered on next launch instead of losing it and starting over |
 | Trailing-4+-digit-code stripping as the merchant/code split heuristic                      | Split on the last whitespace-separated token unconditionally                             | A trailing short number (1-3 digits) is more likely to be part of a name (e.g. a unit number) than an account code in the confirmed real examples; a 4-digit floor matches every real code observed (`096957`, `902850`, `08077`, `20231`) without over-stripping shorter tokens                                                                |
+| Categorization progress counts transactions, not summed amounts (Phase 8) | Weight the ratio by spend amount | The spec's own framing ("X% categorized / Y need review") describes a review workload, not a spend-magnitude metric — one large uncategorized rent payment shouldn't make the meter look worse than ten small uncategorized purchases when the real task (tap the category picker) is identical either way |
+| `PhoneNormalizer` as the single owner, called once at the `PayScreen._pay()` convergence point (Phase 9) | Normalize inside `ContactsService` at load time | Would only fix the contact-picker path, leaving manual entry and frequent-code selection still vulnerable — the confirmed real bug also came from `_isMerchantPayment` being hardcoded true for every frequent code, not just from unnormalized phone strings; normalizing at load time would also hide the real underlying contact record from the picker |
+| Isolate-safe plain-data snapshots (`ProviderSnapshot`/`RawSmsSnapshot`) instead of passing live service objects into `compute()` (Phase 10) | Share the existing `AppDatabase`/`ProviderDetector` instances with a spawned isolate | `compute()` requires its argument to be independent of the main isolate's state; a drift connection is bound to the isolate that created it, so a live service object couldn't safely cross the boundary at all — plain DTOs captured once up front are the only isolate-safe option |
+| `SmsMessages` rows inserted individually even in the batched scan path, only `Transactions`/`UnparsedMessages` are truly batched (Phase 10) | Batch all three inserts together for maximum round-trip reduction | `Transactions.smsMessageId`/`UnparsedMessages.smsMessageId` need each `SmsMessages` row's real generated id to link back to, and drift's `batch()` API doesn't return per-row ids synchronously — batching that specific insert would silently drop the evidence link the rest of this app depends on |
+| Cloud SMS Backup prep dropped entirely, not built as an unused interface (Phase 11) | Design a transport-agnostic `BackupTransport` interface now, implement nothing | Unlike Phase 5's OTP (where an honest local substitute preserved the intended UX), there is no honest local substitute for "cloud backup" — a local encrypted export is a different feature, not a stand-in; half-building an interface for a feature that categorically conflicts with the no-network mandate risks looking like tacit permission to build the network path later without a separate, explicit product decision |

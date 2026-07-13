@@ -1,10 +1,11 @@
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart';
 
 import '../accounts/accounts_service.dart';
 import '../data/database.dart';
 import '../merchants/merchant_normalization_service.dart';
 import '../parsers/momo_parser_registry.dart';
 import '../providers/provider_detection.dart';
+import 'isolate_parsing.dart';
 
 /// The second half of the ingestion pipeline: reads [SmsMessages] rows
 /// still in [SmsProcessingStatus.pending] and turns each into exactly
@@ -71,6 +72,115 @@ class SmsProcessor {
           ..where((tbl) => tbl.id.equals(smsMessageId)))
         .getSingle();
     return _processOne(message);
+  }
+
+  /// Writes a whole chunk of already-detected/already-parsed results
+  /// (from [parseChunk], run on a background isolate — spec Phase 10)
+  /// as one drift transaction instead of the ~6-8 independent awaited
+  /// round-trips per message the old per-message path used. This is
+  /// the DB-write half of the historical scan's performance fix: the
+  /// CPU-bound detection/parsing work already happened off the main
+  /// isolate, so this method's only job is turning those plain-data
+  /// results into real rows with as few round-trips as possible.
+  ///
+  /// Every [SmsMessages] row is still inserted individually (not via
+  /// `batch()`) because [Transactions.smsMessageId]/
+  /// [UnparsedMessages.smsMessageId] need its real generated id to link
+  /// back to — drift's `batch()` API doesn't return per-row ids
+  /// synchronously, so batching that insert would silently drop the
+  /// evidence link the rest of this app depends on. The transactions/
+  /// unparsed-messages writes that follow, which don't need each
+  /// other's ids, ARE batched — that's where the real round-trip
+  /// savings come from, since those are the two writes that happen
+  /// once per message.
+  ///
+  /// Account and merchant resolution are cached per call (not just per
+  /// row) — after the first message for a given provider or
+  /// counterparty, subsequent lookups in the same chunk are free
+  /// in-memory hits instead of repeat queries. Returns how many results
+  /// matched vs. were left unrecognized, mirroring [processPending].
+  Future<({int matched, int unrecognized})> processBatch(List<ParsedSmsResult> results) async {
+    var matched = 0;
+    var unrecognized = 0;
+    final accountCache = <int, Account>{};
+
+    final smsIds = <int>[];
+    for (final result in results) {
+      final sms = result.sms;
+      final smsId = await _db.into(_db.smsMessages).insertOnConflictUpdate(
+            SmsMessagesCompanion.insert(
+              sender: sms.sender,
+              body: sms.body,
+              receivedAt: sms.receivedAt,
+              smsHash: result.smsHash,
+              providerId: Value(result.providerId),
+              processingStatus: Value(
+                result.wasParsed ? SmsProcessingStatus.matched : SmsProcessingStatus.unrecognized,
+              ),
+            ),
+          );
+      smsIds.add(smsId);
+    }
+
+    await _db.batch((batch) async {
+      for (var i = 0; i < results.length; i++) {
+        final result = results[i];
+        final smsId = smsIds[i];
+        final sms = result.sms;
+
+        if (!result.wasParsed) {
+          unrecognized++;
+          batch.insert(
+            _db.unparsedMessages,
+            UnparsedMessagesCompanion.insert(
+              smsMessageId: Value(smsId),
+              sender: sms.sender,
+              body: sms.body,
+              receivedAt: sms.receivedAt,
+            ),
+          );
+          continue;
+        }
+
+        matched++;
+        final parsed = result.parsed!;
+        final providerId = result.providerId!;
+
+        var account = accountCache[providerId];
+        if (account == null) {
+          account = await _accounts.ensureAccountForProvider(providerId);
+          accountCache[providerId] = account;
+        }
+        final merchant = await _merchants.resolveMerchant(parsed.counterparty);
+
+        int? categoryId;
+        if (parsed.counterparty != null) {
+          final category = await _db.findCategoryByCode(parsed.counterparty!);
+          categoryId = category?.id;
+        }
+
+        batch.insert(
+          _db.transactions,
+          TransactionsCompanion.insert(
+            smsMessageId: Value(smsId),
+            providerId: Value(providerId),
+            accountId: Value(account.id),
+            merchantId: Value(merchant?.id),
+            type: parsed.type,
+            amount: parsed.amount,
+            fee: Value(parsed.fee),
+            counterparty: Value(parsed.counterparty),
+            txRef: Value(parsed.txRef),
+            balanceAfter: Value(parsed.balanceAfter),
+            timestamp: parsed.timestamp,
+            rawSmsBody: sms.body,
+            categoryId: Value(categoryId),
+          ),
+        );
+      }
+    });
+
+    return (matched: matched, unrecognized: unrecognized);
   }
 
   Future<bool> _processOne(SmsMessage message) async {

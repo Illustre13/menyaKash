@@ -4,6 +4,7 @@ import '../categorization/categorization_service.dart';
 import '../contacts/contacts_service.dart';
 import '../data/database.dart';
 import '../theme/app_theme.dart';
+import '../ussd/phone_normalizer.dart';
 import '../ussd/ussd_builder.dart';
 import '../ussd/ussd_dialer.dart';
 
@@ -67,9 +68,34 @@ class _PayScreenState extends State<PayScreen> {
       return;
     }
 
-    final code = _isMerchantPayment
-        ? UssdBuilder.payMerchant(tillCode: recipient, amountRwf: amount)
-        : UssdBuilder.sendMoney(phoneNumber: recipient, amountRwf: amount);
+    final String code;
+    if (_isMerchantPayment) {
+      // Till codes are opaque merchant identifiers, never phone-shaped
+      // — nothing to normalize, just hand the raw code through.
+      code = UssdBuilder.payMerchant(tillCode: recipient, amountRwf: amount);
+    } else {
+      // Confirmed real bug (spec Phase 9): neither the contact picker
+      // (only `.trim()`), manual entry, nor frequent-code selection
+      // ever validated or normalized the recipient before this point.
+      // A malformed/merged contact record — or a free-text P2P
+      // counterparty string picked from Frequent codes — could reach
+      // UssdBuilder unsanitized and produce a broken dialer code.
+      final normalized = PhoneNormalizer.normalizeRwandanMobile(recipient);
+      if (normalized == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'That doesn\'t look like a valid Rwandan phone number. '
+                'Check the recipient and try again.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      code = UssdBuilder.sendMoney(phoneNumber: normalized, amountRwf: amount);
+    }
 
     final launched = await UssdDialer.dial(code);
     if (!launched && mounted) {
@@ -132,7 +158,17 @@ class _PayScreenState extends State<PayScreen> {
                 selected: _selectedCode,
                 onSelected: (c) => setState(() {
                   _selectedCode = c;
-                  _isMerchantPayment = true;
+                  // Confirmed real bug (spec Phase 9): this used to be
+                  // hardcoded true for every frequent code, but
+                  // CodeUsage.code is the raw Transactions.counterparty
+                  // string, which for a P2P transfer is a phone-shaped
+                  // number, not a merchant till code. Forcing the
+                  // payMerchant path for a phone number sent an
+                  // unsanitized, non-till-shaped string straight into a
+                  // *182*8*1*...# code — a strong match for the reported
+                  // broken dialer string. Only treat it as a merchant
+                  // payment when it doesn't look like a phone number.
+                  _isMerchantPayment = PhoneNormalizer.normalizeRwandanMobile(c.code) == null;
                 }),
               ),
             _PayTarget.manual => _ManualEntry(

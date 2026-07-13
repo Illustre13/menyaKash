@@ -12,7 +12,20 @@ class UssdBuilder {
   static const _momoRoot = '*182';
 
   /// Send money to another MoMo number: *182*1*1*<phone>*<amount>#
+  ///
+  /// [phoneNumber] must already be normalized to the canonical
+  /// `0XXXXXXXXX` shape via `PhoneNormalizer.normalizeRwandanMobile`
+  /// before calling this — this method does not itself sanitize input,
+  /// it only builds the string. The assert below is a defensive second
+  /// line of guard against a future call site bypassing normalization
+  /// (stripped in release builds, so it can't introduce a new
+  /// release-mode failure path itself).
   static String sendMoney({required String phoneNumber, required int amountRwf}) {
+    assert(
+      RegExp(r'^0\d{9}$').hasMatch(phoneNumber),
+      'sendMoney expects an already-normalized 0XXXXXXXXX number; got '
+      '"$phoneNumber". Normalize with PhoneNormalizer first.',
+    );
     return '$_momoRoot*1*1*$phoneNumber*$amountRwf#';
   }
 

@@ -31,7 +31,7 @@ class IMomoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'i-momo',
+      title: 'Menya Cash',
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       home: const HomeShell(),
@@ -134,6 +134,7 @@ class _HomeShellState extends State<HomeShell> {
         profileService: _profileService,
         accountsService: _accountsService,
         providerSelectionService: _providerSelectionService,
+        onReviewUncategorized: () => setState(() => _index = 2),
       ),
       PayScreen(
         contactsService: _contactsService,

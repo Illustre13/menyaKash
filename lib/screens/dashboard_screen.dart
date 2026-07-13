@@ -9,6 +9,9 @@ import '../analytics/period.dart';
 import '../profile/user_profile_service.dart';
 import '../providers/provider_selection_service.dart';
 import '../theme/app_theme.dart';
+import 'dashboard/categorization_progress.dart';
+import 'dashboard/overview_card.dart';
+import 'dashboard/wallet_breakdown.dart';
 import 'profile/profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -18,12 +21,18 @@ class DashboardScreen extends StatefulWidget {
     required this.profileService,
     required this.accountsService,
     required this.providerSelectionService,
+    this.onReviewUncategorized,
   });
 
   final AnalyticsService analytics;
   final UserProfileService profileService;
   final AccountsService accountsService;
   final ProviderSelectionService providerSelectionService;
+
+  /// Called when the categorization-progress indicator is tapped —
+  /// wired by `HomeShell` to switch to the Categorize tab, since
+  /// `DashboardScreen` doesn't own the bottom-nav index itself.
+  final VoidCallback? onReviewUncategorized;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -36,6 +45,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Future<PeriodComparison> _comparison;
   late Future<List<CategorySpend>> _byCategory;
   late Future<List<PeriodSpend>> _monthly;
+  late Future<List<AccountSummary>> _accountSummaries;
+  late Future<CategorizationRatio> _categorizationRatio;
 
   @override
   void initState() {
@@ -47,11 +58,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _comparison = widget.analytics.summaryWithComparison(_period);
     _byCategory = widget.analytics.spendByCategory(period: _period);
     _monthly = widget.analytics.monthlySpend();
+    // Balances are "now" data, not scoped to _period — wallets don't
+    // reset each week/month/quarter the way spend totals do.
+    _accountSummaries = widget.accountsService.allAccountSummaries();
+    _categorizationRatio = widget.analytics.categorizationRatio(period: _period);
   }
 
   Future<void> _refresh() async {
     setState(_reload);
-    await Future.wait([_comparison, _byCategory, _monthly]);
+    await Future.wait([_comparison, _byCategory, _monthly, _accountSummaries, _categorizationRatio]);
   }
 
   void _setGranularity(PeriodGranularity granularity) {
@@ -105,6 +120,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
+            FutureBuilder<List<AccountSummary>>(
+              future: _accountSummaries,
+              builder: (context, snapshot) {
+                final data = snapshot.data ?? const [];
+                return OverviewCard(summaries: data, currency: currency);
+              },
+            ),
+            const SizedBox(height: 16),
+            Text('Wallet Breakdown', style: Theme.of(context).textTheme.titleMedium),
+            FutureBuilder<List<AccountSummary>>(
+              future: _accountSummaries,
+              builder: (context, snapshot) {
+                final data = snapshot.data ?? const [];
+                return WalletBreakdownList(summaries: data, currency: currency);
+              },
+            ),
+            const SizedBox(height: 28),
             _PeriodGranularitySelector(
               selected: _period.granularity,
               onChanged: _setGranularity,
@@ -145,6 +177,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 return _showCategoryAsPie
                     ? _CategoryPieChart(data: data, isDark: isDark, currency: currency)
                     : _CategoryBarChart(data: data, isDark: isDark, currency: currency);
+              },
+            ),
+            const SizedBox(height: 16),
+            FutureBuilder<CategorizationRatio>(
+              future: _categorizationRatio,
+              builder: (context, snapshot) {
+                final ratio = snapshot.data;
+                if (ratio == null) return const SizedBox.shrink();
+                return CategorizationProgressBar(
+                  ratio: ratio,
+                  onReview: widget.onReviewUncategorized,
+                );
               },
             ),
             const SizedBox(height: 28),

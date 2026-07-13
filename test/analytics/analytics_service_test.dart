@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:i_momo/analytics/analytics_service.dart';
+import 'package:i_momo/analytics/period.dart';
 import 'package:i_momo/data/database.dart';
 
 void main() {
@@ -124,5 +125,94 @@ void main() {
 
     final monthly = await service.monthlySpend(months: 1);
     expect(monthly.every((m) => m.total == 0), isTrue);
+  });
+
+  group('categorizationRatio', () {
+    test('an empty ledger reports 100% categorized, nothing to review', () async {
+      final ratio = await service.categorizationRatio();
+      expect(ratio.total, 0);
+      expect(ratio.categorized, 0);
+      expect(ratio.ratio, 1.0);
+      expect(ratio.needsReviewCount, 0);
+    });
+
+    test('all transactions categorized reports ratio 1.0', () async {
+      final categoryId =
+          await db.into(db.categories).insert(const CategoriesCompanion(name: Value('Food')));
+      for (var i = 0; i < 3; i++) {
+        await db.into(db.transactions).insert(TransactionsCompanion.insert(
+              type: TransactionType.payment,
+              amount: 1000,
+              timestamp: DateTime(2026, 6, i + 1),
+              rawSmsBody: 'irrelevant',
+              categoryId: Value(categoryId),
+            ));
+      }
+
+      final ratio = await service.categorizationRatio();
+      expect(ratio.total, 3);
+      expect(ratio.categorized, 3);
+      expect(ratio.ratio, 1.0);
+      expect(ratio.needsReviewCount, 0);
+    });
+
+    test('a mixed ledger reports the exact fraction categorized', () async {
+      final categoryId =
+          await db.into(db.categories).insert(const CategoriesCompanion(name: Value('Food')));
+      await db.into(db.transactions).insert(TransactionsCompanion.insert(
+            type: TransactionType.payment,
+            amount: 1000,
+            timestamp: DateTime(2026, 6, 1),
+            rawSmsBody: 'irrelevant',
+            categoryId: Value(categoryId),
+          ));
+      await insertTx(type: TransactionType.payment, amount: 500, timestamp: DateTime(2026, 6, 2));
+      await insertTx(type: TransactionType.payment, amount: 200, timestamp: DateTime(2026, 6, 3));
+
+      final ratio = await service.categorizationRatio();
+      expect(ratio.total, 3);
+      expect(ratio.categorized, 1);
+      expect(ratio.needsReviewCount, 2);
+      expect(ratio.ratio, closeTo(1 / 3, 0.0001));
+    });
+
+    test('period scoping excludes out-of-range transactions', () async {
+      await insertTx(type: TransactionType.payment, amount: 500, timestamp: DateTime(2026, 6, 15));
+      await insertTx(type: TransactionType.payment, amount: 500, timestamp: DateTime(2026, 5, 15));
+
+      final june = Period(
+        granularity: PeriodGranularity.month,
+        start: DateTime(2026, 6, 1),
+        end: DateTime(2026, 7, 1),
+      );
+      final ratio = await service.categorizationRatio(period: june);
+      expect(ratio.total, 1, reason: 'the May transaction must be excluded from a June-scoped query');
+    });
+
+    test('a transfer-linked transaction counts in the denominator without needing a category',
+        () async {
+      final debitId = await insertTx(
+        type: TransactionType.bankTransfer,
+        amount: 20000,
+        timestamp: DateTime(2026, 4, 17, 19, 24, 13),
+      );
+      final creditId = await insertTx(
+        type: TransactionType.received,
+        amount: 20000,
+        timestamp: DateTime(2026, 4, 17, 19, 24, 16),
+      );
+      await db.into(db.transferLinks).insert(TransferLinksCompanion.insert(
+            fromTransactionId: debitId,
+            toTransactionId: creditId,
+            confidence: TransferMatchConfidence.confirmed,
+            matchReason: 'test',
+          ));
+
+      final ratio = await service.categorizationRatio();
+      expect(ratio.total, 2,
+          reason: 'transfers are real ledger rows and must count toward "how much is triaged", '
+              'unlike summary()/spendByCategory() which exclude them from spend totals');
+      expect(ratio.categorized, 0);
+    });
   });
 }

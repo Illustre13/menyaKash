@@ -34,7 +34,7 @@ class IMomoWebDevApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'i-momo (web dev preview)',
+      title: 'Menya Cash (web dev preview)',
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       home: const WebDevHomeShell(),
@@ -90,6 +90,7 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         profileService: _profileService,
         accountsService: _accountsService,
         providerSelectionService: _providerSelectionService,
+        onReviewUncategorized: () => setState(() => _index = 2),
       ),
       PayScreen(
         contactsService: _contactsService,
@@ -101,7 +102,7 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('i-momo — web dev preview'),
+        title: const Text('Menya Cash — web dev preview'),
         backgroundColor: Theme.of(context).colorScheme.errorContainer,
         toolbarHeight: 32,
         titleTextStyle: Theme.of(context).textTheme.labelSmall,

@@ -49,6 +49,27 @@ class PeriodComparison {
   }
 }
 
+/// How much of the transaction history still needs manual review — the
+/// dashboard's "X% categorized / Y need review" indicator (spec Phase
+/// 8), replacing the old plain "All Uncategorized" framing. Counts
+/// transactions, not summed amounts: the spec's own framing describes
+/// a review workload ("how many taps are left"), not a spend-magnitude
+/// metric — one large uncategorized rent payment shouldn't make this
+/// look worse than ten small uncategorized purchases when the actual
+/// task is the same either way.
+class CategorizationRatio {
+  const CategorizationRatio({required this.categorized, required this.total});
+
+  final int categorized;
+  final int total;
+
+  /// 1.0 when there are no transactions at all — an empty ledger has
+  /// nothing left to review, not "0% done".
+  double get ratio => total == 0 ? 1.0 : categorized / total;
+
+  int get needsReviewCount => total - categorized;
+}
+
 const _outboundTypes = {
   TransactionType.sent,
   TransactionType.payment,
@@ -237,6 +258,34 @@ class AnalyticsService {
               row.read(amount.sum()) ?? 0,
             ))
         .toList();
+  }
+
+  /// Counts categorized vs. total transactions, scoped to [period] if
+  /// given. Deliberately includes internal-transfer transactions in
+  /// the denominator (unlike [summary]/[spendByCategory]/etc.) — a
+  /// transfer never needs a spending category, but it's still a real
+  /// ledger row, and this metric is about "how much of my data is
+  /// triaged," not "how much did I spend."
+  Future<CategorizationRatio> categorizationRatio({Period? period}) async {
+    final totalQuery = _db.selectOnly(_db.transactions)
+      ..addColumns([_db.transactions.id.count()]);
+    final categorizedQuery = _db.selectOnly(_db.transactions)
+      ..addColumns([_db.transactions.id.count()])
+      ..where(_db.transactions.categoryId.isNotNull());
+
+    if (period != null) {
+      final inPeriod = _db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
+          _db.transactions.timestamp.isSmallerThanValue(period.end);
+      totalQuery.where(inPeriod);
+      categorizedQuery.where(inPeriod);
+    }
+
+    final totalCountExp = _db.transactions.id.count();
+    final total = await totalQuery.map((row) => row.read(totalCountExp)).getSingle();
+    final categorized =
+        await categorizedQuery.map((row) => row.read(totalCountExp)).getSingle();
+
+    return CategorizationRatio(categorized: categorized ?? 0, total: total ?? 0);
   }
 
   void _applyPeriod(

@@ -53,48 +53,89 @@ class MtnRwandaParser extends MomoParser {
   // — a raw string never interpolates, so r'...$_amountGroup' would embed
   // the literal text "$_amountGroup" in the pattern instead of its value.
   static final _amountField = RegExp(_amountGroup, caseSensitive: false);
+  /// Matches both the older `"fee was 20 RWF"`/`"fee was: 20 RWF"` shape
+  /// and the newer `"Fee: 20RWF"`/`"Fee 0 RWF"` shape (confirmed real,
+  /// July 2026 export) — MTN dropped "was"/"paid" and the space before
+  /// "RWF" in the newer format, so both must be optional here.
   static final _feeField =
-      RegExp(r'fee\s+(?:was|paid)[:\s]*' '$_amountGroup', caseSensitive: false);
+      RegExp(r'fee\s*(?:was|paid)?[:\s]*' '$_amountGroup', caseSensitive: false);
+
+  /// Matches both `"new balance: 27,551 RWF"` (older) and bare
+  /// `"Balance: 6353RWF"`/`"Balance:19433 RWF"` (newer, confirmed real —
+  /// no "new", colon/space around the number vary, no space before
+  /// "RWF" in the *S* transfer shape). This is the fix for a confirmed
+  /// real bug: the old new-balance-only pattern silently failed to
+  /// match every current-format message, so `balanceAfter` was written
+  /// null for all of them and `AccountsService.currentBalance` fell
+  /// back to whatever older transaction last had a real balance —
+  /// showing a stale figure far from the user's actual balance.
   static final _balanceField = RegExp(
-    r'(?:new\s+balance|NEW\s+BALANCE)\s*[:\s]+' '$_amountGroup',
+    r'(?:new\s+)?balance\s*[:\s]+' '$_amountGroup',
     caseSensitive: false,
   );
-  // "Financial Transaction Id: 123." or "TxId: 123." or "TxId:123*S*".
+  // "Financial Transaction Id: 123." / "TxId: 123." / "TxId:123*S*" /
+  // the newer short form "FT Id: 123." (confirmed real).
   static final _txRefField = RegExp(
-    r'(?:Financial\s+Transaction\s+Id|TxId)\s*[:.]?\s*(\w+)',
+    r'(?:Financial\s+Transaction\s+Id|FT\s+Id|TxId)\s*[:.]?\s*(\w+)',
     caseSensitive: false,
   );
 
-  /// `received`: "...from NAME (MASKED_PHONE) on your mobile money..."
+  /// `received`: matches both the older
+  /// "...from NAME (MASKED_PHONE) on your mobile money..." shape and
+  /// the newer, shorter "...from NAME (MASKED_PHONE) at TIMESTAMP..."
+  /// shape (confirmed real, no "on your mobile money account" clause
+  /// at all anymore) — the phone-parenthetical is the one anchor both
+  /// share, so match up to whichever of "on"/"at" follows it.
   static final _receivedFromField = RegExp(
-    r'from\s+(.+?)\s*\([\d*]+\)\s+on\s+your\s+mobile\s+money',
+    r'from\s+(.+?)\s*\([\d*]+\)\s+(?:on\s+your\s+mobile\s+money|at\s+\d{4}-)',
     caseSensitive: false,
     dotAll: true,
   );
 
-  /// `sent`: "...transferred to NAME (PHONE) from ACCOUNT at TIMESTAMP"
+  /// `sent`: matches both the older
+  /// "...transferred to NAME (PHONE) from ACCOUNT at TIMESTAMP" shape
+  /// and the newer "...transferred to NAME (PHONE) at TIMESTAMP" shape
+  /// (confirmed real — the "from ACCOUNT" clause was dropped entirely).
+  /// "from" is now optional so both terminate correctly at "at".
   static final _sentToField = RegExp(
-    r'transferred\s+to\s+(.+?)\s*\([\d]+\)\s+from',
+    r'transferred\s+to\s+(.+?)\s*\([\d]+\)\s*(?:from\s+\S+\s+)?at\s+\d{4}-',
     caseSensitive: false,
     dotAll: true,
   );
 
-  /// `payment`: "...payment of AMOUNT RWF to MERCHANT has been completed"
-  /// — the merchant span (name + trailing account code, one opaque blob
-  /// by design at this layer; splitting it is Phase 4's job, not the
-  /// parser's) runs up to "has been completed".
+  /// `payment`: matches both the older "...payment of AMOUNT RWF to
+  /// MERCHANT has been completed" shape and the newer, confirmed-real
+  /// "TxId:...*S*Your payment of AMOUNT RWF to MERCHANT was completed"
+  /// shape (no "has been", just "was completed") — the merchant span
+  /// (name + trailing account code, one opaque blob by design at this
+  /// layer; splitting it is Phase 4's job, not the parser's) runs up to
+  /// whichever of the two completion phrases the message uses.
+  ///
+  /// The optional `with token …` group fixes a confirmed real crash:
+  /// token-vending payments (airtime, MTN Cash Power) embed the token
+  /// and sometimes an "External Transaction Id: …" between the payee
+  /// name and the completion phrase — without this group the lazy
+  /// capture swallowed that entire span into `counterparty` (e.g.
+  /// "MTN Cash Power with token 1111-…-5555 External Transaction Id:
+  /// 987…"), which then blew Merchants' 128-char name limit with an
+  /// InvalidDataException. The payee name is only what comes before
+  /// "with token"; the token itself is not counterparty identity.
   static final _paymentToField = RegExp(
-    r'RWF\s+to\s+(.+?)\s+has\s+been\s+completed',
+    r'RWF\s+to\s+(.+?)(?:\s+with\s+token\b.*?)?\s+(?:has\s+been\s+completed|was\s+completed)',
     caseSensitive: false,
     dotAll: true,
   );
 
-  /// Merchant-debit (`*164*S*...`): "...transaction of AMOUNT RWF by
-  /// MERCHANT  on your MOMO account..." — note the real double space
-  /// before "on" in every confirmed sample; kept optional (`\s+`, not a
-  /// literal double space) so a single-space variant still matches.
+  /// Merchant-debit (`*164*S*...`): matches both the older
+  /// "...transaction of AMOUNT RWF by MERCHANT  on your MOMO account
+  /// was successfully completed..." shape (double space before "on" in
+  /// every confirmed older sample, kept optional so a single-space
+  /// variant still matches) and the newer, shorter "...transaction of
+  /// AMOUNT RWF by MERCHANT was completed..." shape (confirmed real —
+  /// the "on your MOMO account" clause was dropped entirely) by
+  /// terminating at "was ... completed" instead, which both share.
   static final _merchantDebitByField = RegExp(
-    r'RWF\s+by\s+(.+?)\s+on\s+your\s+MOMO\s+account',
+    r'RWF\s+by\s+(.+?)\s+was\s+(?:successfully\s+)?completed',
     caseSensitive: false,
     dotAll: true,
   );

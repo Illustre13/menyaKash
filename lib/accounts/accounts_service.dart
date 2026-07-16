@@ -9,11 +9,16 @@ class AccountSummary {
   const AccountSummary({
     required this.account,
     required this.providerDisplayName,
+    required this.providerCode,
     required this.currentBalance,
   });
 
   final Account account;
   final String providerDisplayName;
+
+  /// Stable provider identifier (e.g. 'mtn_momo_rw') — lets UI resolve
+  /// the provider's logo asset without a second query.
+  final String providerCode;
 
   /// Null when the account has no transactions with a recorded
   /// [Transactions.balanceAfter] yet (e.g. a brand-new account, or a
@@ -43,6 +48,7 @@ class AccountsService {
       summaries.add(AccountSummary(
         account: account,
         providerDisplayName: provider.displayName,
+        providerCode: provider.code,
         currentBalance: await currentBalance(account.id),
       ));
     }
@@ -50,13 +56,33 @@ class AccountsService {
   }
 
   /// The most recent [Transactions.balanceAfter] for [accountId], by
-  /// transaction timestamp — this *is* the account's current balance,
-  /// computed fresh every call rather than cached anywhere. Returns
-  /// null if the account has no transactions with a recorded balance.
+  /// transaction timestamp (tiebroken by row id, so two transactions
+  /// sharing an identical embedded SMS timestamp — confirmed real, e.g.
+  /// a "received" and its paired "transferred to own account" message
+  /// one second apart — resolve deterministically to whichever was
+  /// actually inserted later) — this *is* the account's current
+  /// balance, computed fresh every call rather than cached anywhere.
+  /// Returns null if the account has no transactions with a recorded
+  /// balance.
+  ///
+  /// A confirmed real bug lived here: if a provider's parser silently
+  /// fails to extract a balance for its *current* message format (see
+  /// MtnRwandaParser's balance-field fix), every recent transaction has
+  /// a null balanceAfter, and this query — filtering to non-null
+  /// balances only — quietly falls back to whatever much-older
+  /// transaction last had one, showing a stale figure with no error of
+  /// any kind. This method can't detect that on its own (a null
+  /// balance for a genuinely balance-less provider like Equity is
+  /// normal, not a bug) — the real fix is keeping every parser's
+  /// balance regex current against real message formats, verified by
+  /// fixtures sourced from an actual device export, not assumptions.
   Future<double?> currentBalance(int accountId) async {
     final query = _db.select(_db.transactions)
       ..where((tbl) => tbl.accountId.equals(accountId) & tbl.balanceAfter.isNotNull())
-      ..orderBy([(tbl) => OrderingTerm.desc(tbl.timestamp)])
+      ..orderBy([
+        (tbl) => OrderingTerm.desc(tbl.timestamp),
+        (tbl) => OrderingTerm.desc(tbl.id),
+      ])
       ..limit(1);
     final row = await query.getSingleOrNull();
     return row?.balanceAfter;

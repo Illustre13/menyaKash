@@ -76,6 +76,11 @@ const _outboundTypes = {
   TransactionType.withdrawal,
   TransactionType.airtime,
   TransactionType.bankTransfer,
+  // A transaction fee (spec #3) is real money leaving the account —
+  // its own first-class Transactions row now, categorized to "Fees &
+  // Charges" and linked via parentTransactionId, no longer folded into
+  // its parent's `amount + fee` the way totals used to be computed.
+  TransactionType.fee,
 };
 
 const _inboundTypes = {
@@ -115,7 +120,11 @@ class AnalyticsService {
       final isTransfer = linkedIds.contains(tx.id);
       if (!isTransfer) {
         if (_inboundTypes.contains(tx.type)) totalIn += tx.amount;
-        if (_outboundTypes.contains(tx.type)) totalOut += (tx.amount + tx.fee);
+        // Just tx.amount, not `amount + fee` (spec #3): a fee is now
+        // its own Transactions row (TransactionType.fee, already in
+        // _outboundTypes) with its own amount, counted on its own —
+        // adding tx.fee here too would double-count it.
+        if (_outboundTypes.contains(tx.type)) totalOut += tx.amount;
       }
 
       if (tx.balanceAfter != null &&
@@ -217,7 +226,9 @@ class AnalyticsService {
     for (final tx in rows) {
       if (linkedIds.contains(tx.id)) continue;
       final bucketStart = DateTime(tx.timestamp.year, tx.timestamp.month, 1);
-      buckets[bucketStart] = (buckets[bucketStart] ?? 0) + tx.amount + tx.fee;
+      // Just tx.amount — see summary()'s doc for why fee is no longer
+      // added here (spec #3, fee rows count on their own now).
+      buckets[bucketStart] = (buckets[bucketStart] ?? 0) + tx.amount;
     }
 
     final sortedKeys = buckets.keys.toList()..sort();

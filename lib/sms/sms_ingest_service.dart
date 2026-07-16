@@ -25,11 +25,19 @@ class ScanProgress {
     required this.totalMessages,
     required this.processedMessages,
     required this.matchedTransactions,
+    this.matchedByProvider = const {},
   });
 
   final int totalMessages;
   final int processedMessages;
   final int matchedTransactions;
+
+  /// Provider display name → matched-transaction count so far — lets
+  /// the scan screen show "MTN Mobile Money: 412, Equity Bank: 38"
+  /// instead of one opaque combined total when several providers are
+  /// selected (spec #1). Keyed by display name, not code, since that's
+  /// what the UI shows directly with no extra lookup.
+  final Map<String, int> matchedByProvider;
 
   bool get isDone => processedMessages >= totalMessages;
   double get fraction => totalMessages == 0 ? 1.0 : processedMessages / totalMessages;
@@ -94,9 +102,18 @@ class SmsIngestService {
       ],
     );
 
-    final providerSnapshot = await _snapshotProviders();
+    final providerSnapshot = await snapshotSelectedProviders(_db);
     final knownSenders = providerSnapshot.expand((p) => p.senderPatterns).toSet();
     final knownHashes = (await _db.select(_db.smsMessages).get()).map((m) => m.smsHash).toSet();
+
+    // id -> display name, so per-provider progress can show a real
+    // name ("MTN Mobile Money: 412") instead of an opaque provider id.
+    final providerNames = {
+      for (final row in await _db.select(_db.financialProviders).get()) row.id: row.displayName,
+    };
+    final matchedByProvider = <String, int>{
+      for (final provider in providerSnapshot) providerNames[provider.providerId] ?? '?': 0,
+    };
 
     // Only messages from a recognized sender are worth spending isolate
     // time on at all — same "unknown sender, ignore" filtering v1 and
@@ -144,45 +161,24 @@ class SmsIngestService {
       matched += outcome.matched;
       processed += chunk.length;
 
+      // Per-provider breakdown (spec #1): counted directly off this
+      // chunk's parse results rather than re-querying the DB, since
+      // each ParsedSmsResult already carries the resolved providerId
+      // and whether it was actually parsed into a transaction.
+      for (final result in toWrite) {
+        if (!result.wasParsed || result.providerId == null) continue;
+        final name = providerNames[result.providerId!];
+        if (name == null) continue;
+        matchedByProvider[name] = (matchedByProvider[name] ?? 0) + 1;
+      }
+
       yield ScanProgress(
         totalMessages: total,
         processedMessages: processed,
         matchedTransactions: matched,
+        matchedByProvider: Map.unmodifiable(matchedByProvider),
       );
     }
-  }
-
-  /// Plain-data snapshot of every seeded [FinancialProviders] row and
-  /// its known senders, for isolate-safe use in [scanHistoricalInbox].
-  /// [DisambiguatorRule] mirrors the one real body-content
-  /// disambiguation rule this app has today
-  /// (`provider_detector_factory.dart` — MTN's `M-Money` shortcode
-  /// carrying both MoMo and eKash traffic). If a future provider needs
-  /// a different disambiguator, both this mapping and the live
-  /// [ProviderDetector] registration need a matching update — they
-  /// must stay in sync for the isolate path to behave identically to
-  /// the live single-message path.
-  Future<List<ProviderSnapshot>> _snapshotProviders() async {
-    final providers = await _db.select(_db.financialProviders).get();
-    final senders = await _db.select(_db.providerSenders).get();
-
-    return providers.map((provider) {
-      final patterns = senders
-          .where((s) => s.providerId == provider.id)
-          .map((s) => s.senderPattern)
-          .toList();
-      final disambiguator = switch (provider.code) {
-        'ekash_rw' => DisambiguatorRule.containsEkash,
-        'mtn_momo_rw' => DisambiguatorRule.notContainsEkash,
-        _ => DisambiguatorRule.none,
-      };
-      return ProviderSnapshot(
-        providerId: provider.id,
-        providerCode: provider.code,
-        senderPatterns: patterns,
-        disambiguator: disambiguator,
-      );
-    }).toList();
   }
 
   /// Registers a listener for new incoming SMS. Must be called after
@@ -193,7 +189,7 @@ class SmsIngestService {
         final sender = message.address;
         final body = message.body;
         if (sender == null || body == null) return;
-        final smsId = await _storeIfKnownSender(sender, body, DateTime.now());
+        final smsId = await _storeIfSelectedProvider(sender, body, DateTime.now());
         if (smsId != null) {
           await _processor.processOneById(smsId);
         }
@@ -203,14 +199,21 @@ class SmsIngestService {
   }
 
   /// Stores [body] as a new [SmsMessages] row if — and only if —
-  /// [sender] matches a known [FinancialProviders] sender pattern.
-  /// Returns the new row's id, or null if the sender is unrecognized
-  /// (nothing is stored for messages from unknown senders, same
-  /// filtering behavior as v1) or if this exact message was already
+  /// [sender] resolves to a provider the user has actually enabled
+  /// (see [UserFinancialSources]). Returns the new row's id, or null if
+  /// the sender is unrecognized, resolves to a provider the user hasn't
+  /// selected (spec #11: only enabled providers are scanned/processed
+  /// — same rule the historical scan applies via
+  /// [snapshotSelectedProviders]), or if this exact message was already
   /// stored (dedup via the unique hash — see [hashSmsMessage]).
-  Future<int?> _storeIfKnownSender(String sender, String body, DateTime receivedAt) async {
+  Future<int?> _storeIfSelectedProvider(String sender, String body, DateTime receivedAt) async {
     final detection = await _detector.detect(sender: sender, body: body);
     if (detection == null) return null;
+
+    final isSelected = await (_db.select(_db.userFinancialSources)
+          ..where((tbl) => tbl.providerId.equals(detection.provider.id)))
+        .getSingleOrNull();
+    if (isSelected == null) return null;
 
     final hash = hashSmsMessage(sender: sender, body: body, receivedAt: receivedAt);
     final existing =
@@ -227,4 +230,56 @@ class SmsIngestService {
           ),
         );
   }
+}
+
+/// Plain-data snapshot of the [FinancialProviders] rows the user has
+/// explicitly enabled ([UserFinancialSources]) and their known senders,
+/// for isolate-safe use in [SmsIngestService.scanHistoricalInbox].
+///
+/// Selection-filtered by design (spec #11): a user who enabled only MTN
+/// MoMo must not have Equity/BK/Airtel messages scanned, stored, or
+/// processed — so unselected providers are absent from the snapshot
+/// entirely, which removes their senders from the scan's candidate
+/// filter AND removes them as resolution targets for shared senders
+/// (e.g. `M-Money` carries both MTN MoMo and eKash: with only MTN
+/// selected, an eKash-bodied message fails MTN's not-contains-ekash
+/// disambiguator, resolves to no provider, and is skipped). An empty
+/// selection yields an empty snapshot — the scan scans nothing, which
+/// is the honest reading of "no providers enabled," not a fallback to
+/// everything.
+///
+/// [DisambiguatorRule] mirrors the one real body-content disambiguation
+/// rule this app has today (`provider_detector_factory.dart`). If a
+/// future provider needs a different disambiguator, both this mapping
+/// and the live [ProviderDetector] registration need a matching update
+/// — they must stay in sync for the isolate path to behave identically
+/// to the live single-message path.
+///
+/// Top-level (not a method on [SmsIngestService]) so tests can exercise
+/// the selection filtering against an in-memory database without
+/// instantiating the Telephony-backed service.
+Future<List<ProviderSnapshot>> snapshotSelectedProviders(AppDatabase db) async {
+  final selections = await db.select(db.userFinancialSources).get();
+  final selectedIds = selections.map((s) => s.providerId).toSet();
+
+  final providers = await db.select(db.financialProviders).get();
+  final senders = await db.select(db.providerSenders).get();
+
+  return providers.where((p) => selectedIds.contains(p.id)).map((provider) {
+    final patterns = senders
+        .where((s) => s.providerId == provider.id)
+        .map((s) => s.senderPattern)
+        .toList();
+    final disambiguator = switch (provider.code) {
+      'ekash_rw' => DisambiguatorRule.containsEkash,
+      'mtn_momo_rw' => DisambiguatorRule.notContainsEkash,
+      _ => DisambiguatorRule.none,
+    };
+    return ProviderSnapshot(
+      providerId: provider.id,
+      providerCode: provider.code,
+      senderPatterns: patterns,
+      disambiguator: disambiguator,
+    );
+  }).toList();
 }

@@ -29,6 +29,31 @@ void main() {
         ));
   }
 
+  test(
+      'a fee, as its own separate Transactions row (spec #3), counts exactly '
+      'once — never double-counted against its parent payment', () async {
+    await insertTx(
+      type: TransactionType.payment,
+      amount: 3000,
+      timestamp: DateTime(2026, 6, 1),
+    );
+    final feeId = await insertTx(
+      type: TransactionType.fee,
+      amount: 100,
+      timestamp: DateTime(2026, 6, 1),
+    );
+    // Link it the same way SmsProcessor does — parentTransactionId
+    // itself isn't read by summary(), but setting it keeps this test
+    // representative of what a real fee row actually looks like.
+    await (db.update(db.transactions)..where((tbl) => tbl.id.equals(feeId)))
+        .write(const TransactionsCompanion(parentTransactionId: Value(1)));
+
+    final summary = await service.summary();
+    expect(summary.totalOut, 3100,
+        reason: 'payment (3000) + fee (100) as two independent rows — not 3000 + '
+            '(3000+100) which the old amount+fee folding would have produced');
+  });
+
   test('a real expense and a real income are counted normally', () async {
     await insertTx(
       type: TransactionType.payment,

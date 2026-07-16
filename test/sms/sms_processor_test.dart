@@ -34,7 +34,11 @@ void main() {
     // Phase 2 added EkashParser — this exact body used to have no
     // parser at all (Phase 1) and was the test case proving fail-safe
     // routing worked. Now it's the test case proving the real parser
-    // works, since eKash genuinely is a supported provider.
+    // works, since eKash genuinely is a supported provider. This body
+    // also carries a real fee — see the dedicated fee-splitting group
+    // below for the assertions on that; this test's own concern is
+    // just "eKash routing still works," so it only checks the payment
+    // row (index 0; the payment always inserts before its fee row).
     final id = await insertPendingSms(
       sender: 'M-Money',
       body: '*162*TxId:13559072472*S*Your payment of 500 RWF to eKash with token  has been '
@@ -46,8 +50,8 @@ void main() {
     expect(matched, isTrue);
 
     final txs = await db.select(db.transactions).get();
-    expect(txs, hasLength(1));
-    expect(txs.single.amount, 500);
+    final payment = txs.firstWhere((t) => t.type != TransactionType.fee);
+    expect(payment.amount, 500);
 
     final updated =
         await (db.select(db.smsMessages)..where((tbl) => tbl.id.equals(id))).getSingle();
@@ -122,6 +126,133 @@ void main() {
           ..where((tbl) => tbl.processingStatus.equalsValue(SmsProcessingStatus.pending)))
         .get();
     expect(stillPending, isEmpty);
+  });
+
+  group('fee-as-its-own-transaction (spec #3)', () {
+    test('a message with a real fee creates a second, linked Transactions row', () async {
+      final id = await insertPendingSms(
+        sender: 'M-Money',
+        body: '*162*TxId:13559072472*S*Your payment of 500 RWF to eKash with token  has been '
+            'completed at 2026-04-15 21:39:02. Fee was 20 RWF. Your new balance: 21931 RWF . '
+            'Message: - ACSC. *EN#',
+      );
+
+      await processor.processOneById(id);
+
+      final txs = await db.select(db.transactions).get();
+      expect(txs, hasLength(2), reason: 'the payment AND its fee, as two real rows');
+
+      final payment = txs.firstWhere((t) => t.type != TransactionType.fee);
+      final fee = txs.firstWhere((t) => t.type == TransactionType.fee);
+
+      expect(payment.amount, 500);
+      expect(fee.amount, 20);
+      expect(fee.parentTransactionId, payment.id,
+          reason: 'the fee row must reference the transaction it was charged for');
+      expect(fee.accountId, payment.accountId, reason: 'the fee left the same wallet');
+      expect(fee.timestamp, payment.timestamp,
+          reason: 'the SMS reports one moment for both the payment and its fee');
+    });
+
+    test('the fee row is categorized to "Fees & Charges" (the seeded default)', () async {
+      final id = await insertPendingSms(
+        sender: 'M-Money',
+        body: '*165*S*5000 RWF transferred to Jean Uwimana (250788123456) from 15568442 at '
+            '2026-04-15 19:54:02 . Fee was: 100 RWF. New balance: 27551 RWF. *EN#',
+      );
+
+      await processor.processOneById(id);
+
+      final feeCategory = await (db.select(db.categories)
+            ..where((tbl) => tbl.name.equals('Fees & Charges')))
+          .getSingle();
+      final fee = (await db.select(db.transactions).get())
+          .firstWhere((t) => t.type == TransactionType.fee);
+      expect(fee.categoryId, feeCategory.id);
+    });
+
+    test('a message with no fee creates no fee row at all', () async {
+      final id = await insertPendingSms(
+        sender: 'M-Money',
+        body: 'You have received 5000 RWF from Jean Uwimana (250788123456) on your mobile money '
+            'account at 2026-07-08 14:32:10. Message from sender: . Your new balance:12500 RWF. '
+            'Financial Transaction Id: 987654321.',
+      );
+
+      await processor.processOneById(id);
+
+      final txs = await db.select(db.transactions).get();
+      expect(txs, hasLength(1), reason: 'a real fee of 0 must never create a fee row');
+    });
+
+    test('processBatch also splits a real fee into its own linked row', () async {
+      const sender = 'M-Money';
+      const body = '*165*S*800 RWF transferred to Emmanuel MANIRAFASHA (250796242268) at '
+          '2026-07-16 08:22:23 .Fee: 20RWF.Balance: 2223RWF.Dial *182*1*3# and send money '
+          'abroad *EN#';
+      final receivedAt = DateTime(2026, 7, 16, 8, 22, 23);
+
+      final mtnProvider = await (db.select(db.financialProviders)
+            ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
+          .getSingle();
+      final result = ParsedSmsResult(
+        sms: RawSmsSnapshot(sender: sender, body: body, receivedAt: receivedAt),
+        smsHash: hashSmsMessage(sender: sender, body: body, receivedAt: receivedAt),
+        providerId: mtnProvider.id,
+        parsed: MomoParserRegistry()
+            .processForProvider(providerCode: 'mtn_momo_rw', body: body)
+            .transaction,
+      );
+
+      final outcome = await processor.processBatch([result]);
+      expect(outcome.matched, 1);
+
+      final txs = await db.select(db.transactions).get();
+      expect(txs, hasLength(2));
+      final payment = txs.firstWhere((t) => t.type != TransactionType.fee);
+      final fee = txs.firstWhere((t) => t.type == TransactionType.fee);
+      expect(fee.amount, 20);
+      expect(fee.parentTransactionId, payment.id);
+    });
+
+    test('a batch of several fee-bearing messages links each fee to its own correct parent',
+        () async {
+      final mtnProvider = await (db.select(db.financialProviders)
+            ..where((tbl) => tbl.code.equals('mtn_momo_rw')))
+          .getSingle();
+
+      final bodies = [
+        '*165*S*800 RWF transferred to Pascal NDAGIJIMANA (250787214806) at 2026-07-10 '
+            '17:22:47 .Fee: 20RWF.Balance: 473RWF.Dial *182*1*3# and send money abroad *EN#',
+        '*165*S*30000 RWF transferred to Christian GUHIRWA (250790714202) at 2026-07-10 '
+            '12:36:52 .Fee: 250RWF.Balance: 5313RWF.Dial *182*1*3# and send money abroad *EN#',
+      ];
+      final results = bodies.map((body) {
+        final receivedAt = DateTime(2026, 7, 10);
+        return ParsedSmsResult(
+          sms: RawSmsSnapshot(sender: 'M-Money', body: body, receivedAt: receivedAt),
+          smsHash: hashSmsMessage(sender: 'M-Money', body: body, receivedAt: receivedAt),
+          providerId: mtnProvider.id,
+          parsed: MomoParserRegistry()
+              .processForProvider(providerCode: 'mtn_momo_rw', body: body)
+              .transaction,
+        );
+      }).toList();
+
+      await processor.processBatch(results);
+
+      final txs = await db.select(db.transactions).get();
+      final payments = txs.where((t) => t.type != TransactionType.fee).toList();
+      final fees = txs.where((t) => t.type == TransactionType.fee).toList();
+      expect(payments, hasLength(2));
+      expect(fees, hasLength(2));
+
+      final feeByParent = {for (final f in fees) f.parentTransactionId: f};
+      final firstPayment = payments.firstWhere((p) => p.amount == 800);
+      final secondPayment = payments.firstWhere((p) => p.amount == 30000);
+      expect(feeByParent[firstPayment.id]!.amount, 20);
+      expect(feeByParent[secondPayment.id]!.amount, 250);
+    });
   });
 
   group('processBatch (Phase 10 batched historical-scan path)', () {

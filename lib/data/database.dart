@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import '../categorization/category_taxonomy.dart' show defaultCategorySeed;
+
 part 'database.g.dart';
 
 /// Transaction type as inferred by a [MomoParser]. Kept as a plain enum
@@ -18,6 +20,14 @@ enum TransactionType {
   bankTransfer,
   reversed,
   unknown,
+
+  /// A transaction fee charged for another transaction (spec #3) —
+  /// always has [Transactions.parentTransactionId] set, always
+  /// categorized to "Fees & Charges." Created automatically by
+  /// [SmsProcessor] whenever a parsed transaction reports a non-zero
+  /// fee; never itself the type a parser directly returns from SMS
+  /// text.
+  fee,
 }
 
 /// Whether an [SmsMessages] row has been run through the provider
@@ -302,6 +312,14 @@ class Transactions extends Table {
   TextColumn get type => textEnum<TransactionType>()();
 
   RealColumn get amount => real()();
+
+  /// The fee exactly as the SMS reported it — kept as real evidence
+  /// even though (from spec #3) the fee is no longer folded into any
+  /// total via this column. A real fee-charge [Transactions] row is
+  /// what actually represents the fee in analytics/budgets now (see
+  /// [parentTransactionId]); this column is the historical/evidence
+  /// copy, matching [rawSmsBody]'s "never drop what the SMS literally
+  /// said" rule.
   RealColumn get fee => real().withDefault(const Constant(0))();
 
   /// Raw counterparty identifier (phone number, till code, agent code,
@@ -322,6 +340,21 @@ class Transactions extends Table {
 
   IntColumn get categoryId =>
       integer().nullable().references(Categories, #id)();
+
+  /// Set only on a fee-charge row created FOR another transaction (spec
+  /// #3) — points back at the real payment/transfer/withdrawal the fee
+  /// was charged for, so the two are referenceable to each other (e.g.
+  /// "this RWF 20 fee was for the transfer to Jean Claude" shown in the
+  /// UI) without merging them into one row. A fee gets its own
+  /// first-class [Transactions] row (type [TransactionType.fee],
+  /// categorized to "Fees & Charges") instead of being folded silently
+  /// into the parent's total the way `amount + fee` used to be computed
+  /// everywhere — that hid fees from every chart/budget/search and made
+  /// "how much did I pay in fees this month" impossible to answer. Null
+  /// on every normal transaction, including the parent a fee row points
+  /// to (this is a one-level link, not a tree).
+  IntColumn get parentTransactionId =>
+      integer().nullable().references(Transactions, #id, onDelete: KeyAction.cascade)();
 }
 
 /// The single local user identity created during onboarding (spec Phase
@@ -363,6 +396,23 @@ class UserProfile extends Table {
   /// which conflated permission state with identity/setup completion.
   DateTimeColumn get onboardingCompletedAt => dateTime().nullable()();
 
+  /// Persisted theme choice (spec sprint #3): 'light' | 'dark' |
+  /// 'system'. Null means the user never chose (pre-v5 install or
+  /// skipped the onboarding theme step) — the app then defaults to
+  /// Light, per product decision, not to system. Stored as text rather
+  /// than a Dart enum ordinal so a DB inspected outside the app reads
+  /// meaningfully and enum reordering can never corrupt it.
+  TextColumn get themeMode => text().nullable()();
+
+  /// A short, shareable local code (spec #6 referral screen). Generated
+  /// once, on first read, from this row's own [id] + [createdAt] (see
+  /// `ReferralService`) — deterministic and offline, not a
+  /// server-issued code, since this app has no backend to issue or
+  /// redeem one against. It exists purely so a user has something
+  /// stable to show/share; nothing in this app currently validates a
+  /// code entered by someone else.
+  TextColumn get referralCode => text().nullable()();
+
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
@@ -388,6 +438,54 @@ class UserFinancialSources extends Table {
   @override
   List<Set<Column>> get uniqueKeys => [
         {providerId}
+      ];
+}
+
+/// A phone contact the user has starred as a favorite on the Pay
+/// screen (spec #7) — favorites always sort first in the contact
+/// picker. Keyed by the contact's normalized phone number
+/// (`PhoneNormalizer.normalizeRwandanMobile`'s canonical `0XXXXXXXXX`
+/// form), not the OS contact id: `ContactsService` never persists a
+/// local copy of contact data (real device contacts are read fresh
+/// every time, per that service's own "no local copy of PII beyond
+/// what's needed" rule), and a phone number is the one stable, already
+/// app-visible identifier that survives the OS renaming/merging a
+/// contact — an OS contact id has no such guarantee and this app has
+/// no reason to store one.
+class FavoriteContacts extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get normalizedPhone => text().withLength(min: 10, max: 10)();
+
+  DateTimeColumn get favoritedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {normalizedPhone}
+      ];
+}
+
+/// A monthly spending limit for one category (UI redesign sprint —
+/// the Budgets tab). One budget per category; the limit applies to
+/// each calendar month independently ("RWF 50,000 on Food per month"),
+/// so there is no month column — spend-so-far is always computed live
+/// from [Transactions] for the month being viewed, never stored, for
+/// the same single-source-of-truth reason [Accounts] has no balance
+/// column.
+class Budgets extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  IntColumn get categoryId =>
+      integer().references(Categories, #id, onDelete: KeyAction.cascade)();
+
+  /// The monthly cap in RWF.
+  RealColumn get monthlyLimit => real()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {categoryId}
       ];
 }
 
@@ -425,19 +523,22 @@ class UnparsedMessages extends Table {
   TransferLinks,
   UserProfile,
   UserFinancialSources,
+  Budgets,
+  FavoriteContacts,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           await _seedProviders();
+          await _seedDefaultCategories();
           // Deliberately no _seedDefaultAccounts() call here: from
           // schemaVersion 4, a fresh install creates zero Accounts rows
           // until the user picks providers on the Phase 6 setup screen
@@ -468,6 +569,59 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(userProfile);
             await m.createTable(userFinancialSources);
             await _grandfatherExistingUsers();
+          }
+          if (from < 5 && from >= 4) {
+            // Theme preference (sprint #3). Nullable — existing users
+            // simply have "never chose," which the app treats as Light.
+            // Guarded to from >= 4: a pre-v4 database just had
+            // user_profile created by the block above in its CURRENT
+            // shape (themeMode included), so adding the column again
+            // would fail with a duplicate-column error.
+            await m.addColumn(userProfile, userProfile.themeMode);
+          }
+          if (from < 6) {
+            // Budgets (UI redesign sprint) — a brand-new table, safe to
+            // create unconditionally on every upgrade path.
+            await m.createTable(budgets);
+          }
+          if (from < 7) {
+            // Default category taxonomy (spec #9). insertOnConflictUpdate
+            // in _seedDefaultCategories skips any name an existing user
+            // already has (e.g. a same-named custom category they made
+            // themselves before this shipped) rather than duplicating it
+            // — see that method's doc for why this is safe.
+            await _seedDefaultCategories();
+          }
+          if (from < 8) {
+            // Fee-as-its-own-transaction (spec #3): a new self-reference
+            // column, safe to add unconditionally. Existing history's
+            // fees stay folded into their parent's `fee` column exactly
+            // as before (still real evidence) — this migration
+            // deliberately does NOT retroactively split every past
+            // transaction's fee into a new row, since that would
+            // silently inflate a user's historical transaction *count*
+            // and could double a fee that a user already manually
+            // reviewed/categorized under the old model. Going forward,
+            // only newly-ingested transactions get a real fee row (see
+            // SmsProcessor). Backfilling old history is a deliberate,
+            // separate, user-visible action if ever wanted — not a
+            // silent migration side effect.
+            await m.addColumn(transactions, transactions.parentTransactionId);
+          }
+          if (from < 9) {
+            // Favorite contacts (spec #7 Pay screen redesign) — a
+            // brand-new table, safe to create unconditionally.
+            await m.createTable(favoriteContacts);
+          }
+          if (from < 10 && from >= 4) {
+            // Referral code (spec #6). ReferralService fills it in
+            // lazily on first read for existing users. Guarded to
+            // from >= 4, same reasoning as themeMode above: a pre-v4
+            // database just had user_profile created by the `from < 4`
+            // block in its CURRENT shape (referralCode included), so
+            // adding the column again here would fail with a
+            // duplicate-column error.
+            await m.addColumn(userProfile, userProfile.referralCode);
           }
         },
       );
@@ -501,6 +655,29 @@ class AppDatabase extends _$AppDatabase {
           ProviderSendersCompanion.insert(senderPattern: sender, providerId: providerId),
         );
       }
+    }
+  }
+
+  /// Seeds the curated default category taxonomy (spec #9) — see
+  /// [defaultCategorySeed]. Explicit exists-check rather than
+  /// `insertOnConflictUpdate`: that method's upsert target is the
+  /// table's primary key by default in this drift version, not a
+  /// declared unique column (`Categories.name` here) — the same class
+  /// of bug already found and fixed once in `ProviderSelectionService`
+  /// — so it would never actually detect an existing same-named
+  /// category and would violate the unique constraint on a re-run
+  /// (e.g. this migration executing on from-6 upgrade after already
+  /// having run once via onCreate in a rare double-migration path).
+  /// Never overwrites a category a user already renamed or a
+  /// same-named custom category they created themselves before this
+  /// taxonomy shipped — seeding only ever adds a missing default, never
+  /// touches an existing row.
+  Future<void> _seedDefaultCategories() async {
+    for (final (name, _) in defaultCategorySeed) {
+      final existing =
+          await (select(categories)..where((tbl) => tbl.name.equals(name))).getSingleOrNull();
+      if (existing != null) continue;
+      await into(categories).insert(CategoriesCompanion.insert(name: name));
     }
   }
 

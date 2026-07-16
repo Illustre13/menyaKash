@@ -68,6 +68,21 @@ class UserProfileService {
         .write(UserProfileCompanion(appLockEnabled: Value(enabled)));
   }
 
+  /// Persists the theme choice ('light' | 'dark' | 'system' — see
+  /// [UserProfile.themeMode]). Creates the profile row if onboarding
+  /// hasn't created one yet, same as [setAppLockEnabled].
+  Future<void> setThemeMode(String mode) async {
+    final existing = await currentProfile();
+    if (existing == null) {
+      await _db.into(_db.userProfile).insert(
+            UserProfileCompanion.insert(themeMode: Value(mode)),
+          );
+      return;
+    }
+    await (_db.update(_db.userProfile)..where((tbl) => tbl.id.equals(existing.id)))
+        .write(UserProfileCompanion(themeMode: Value(mode)));
+  }
+
   /// Marks onboarding as complete — called once, at the end of the
   /// Phase 6 provider-selection step. [HomeShell] checks this (not SMS
   /// permission state) to decide whether to show onboarding.

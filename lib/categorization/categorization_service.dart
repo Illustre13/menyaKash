@@ -44,6 +44,46 @@ class CategorizationService {
       (_db.select(_db.categories)..where((tbl) => tbl.id.equals(id)))
           .getSingleOrNull();
 
+  /// id → name for every category, loaded once per list build — the
+  /// transaction list previously ran a `FutureBuilder` + query *per
+  /// visible row* to resolve a category name (a genuine rebuild/query
+  /// hotspot); one map lookup per row replaces all of that.
+  Future<Map<int, String>> categoryNamesById() async {
+    final categories = await _db.select(_db.categories).get();
+    return {for (final c in categories) c.id: c.name};
+  }
+
+  /// id → display name for every provider — powers the transaction
+  /// tile's provider badge without a query per row.
+  Future<Map<int, String>> providerNamesById() async {
+    final providers = await _db.select(_db.financialProviders).get();
+    return {for (final p in providers) p.id: p.displayName};
+  }
+
+  /// id → user-facing label for every account — powers the transaction
+  /// tile's account line without a query per row.
+  Future<Map<int, String>> accountLabelsById() async {
+    final accounts = await _db.select(_db.accounts).get();
+    return {for (final a in accounts) a.id: a.label};
+  }
+
+  /// id → stable code (e.g. 'mtn_momo_rw') for every provider — powers
+  /// the transaction tile's logo without a query per row.
+  Future<Map<int, String>> providerCodesById() async {
+    final providers = await _db.select(_db.financialProviders).get();
+    return {for (final p in providers) p.id: p.code};
+  }
+
+  /// Every transaction id that's one side of a matched internal
+  /// transfer — the Transactions feed renders those rows with the
+  /// transfer treatment instead of income/expense.
+  Future<Set<int>> linkedTransferTransactionIds() async {
+    final links = await _db.select(_db.transferLinks).get();
+    return {
+      for (final link in links) ...[link.fromTransactionId, link.toTransactionId],
+    };
+  }
+
   Future<int> createCategory(String name) {
     return _db
         .into(_db.categories)
@@ -102,16 +142,31 @@ class CategorizationService {
   Future<SimilarGroup?> findSimilarUncategorized(Transaction anchor) async {
     final anchorName = anchor.counterparty?.trim();
     if (anchorName == null || anchorName.isEmpty) return null;
+    return _findSimilarUncategorizedByName(anchorName, excludeTransactionId: anchor.id);
+  }
 
+  /// Same matching rule as [findSimilarUncategorized], anchored on a raw
+  /// counterparty string instead of a specific [Transaction] — the
+  /// Frequent Codes tab edits a code's category independent of any one
+  /// transaction (a [CodeUsage] row, not a [Transaction]), so it has no
+  /// anchor row to pass. Used by [categorizeCounterpartyEverywhere] to
+  /// fix the confirmed real bug where editing a frequent code's category
+  /// only updated transactions sharing its *exact* counterparty string,
+  /// silently leaving name-variant transactions for the same real
+  /// merchant (e.g. a different trailing till code) uncategorized.
+  Future<SimilarGroup?> _findSimilarUncategorizedByName(
+    String anchorName, {
+    int? excludeTransactionId,
+  }) async {
     final anchorKey = _significantToken(anchorName);
     if (anchorKey == null) return null;
 
-    final candidates = await (_db.select(_db.transactions)
-          ..where((tbl) =>
-              tbl.categoryId.isNull() &
-              tbl.id.equals(anchor.id).not() &
-              tbl.counterparty.isNotNull()))
-        .get();
+    final query = _db.select(_db.transactions)
+      ..where((tbl) => tbl.categoryId.isNull() & tbl.counterparty.isNotNull());
+    if (excludeTransactionId != null) {
+      query.where((tbl) => tbl.id.equals(excludeTransactionId).not());
+    }
+    final candidates = await query.get();
 
     final similar = candidates.where((tx) {
       final key = _significantToken(tx.counterparty!.trim());
@@ -119,7 +174,26 @@ class CategorizationService {
     }).toList();
 
     if (similar.isEmpty) return null;
-    return SimilarGroup(anchor, similar);
+    // No real anchor transaction exists in this path — the first match
+    // stands in as SimilarGroup's anchor slot (categorizeGroup treats
+    // every transaction in the group identically, so which one is
+    // nominally "the anchor" has no behavioral effect).
+    return SimilarGroup(similar.first, similar.skip(1).toList());
+  }
+
+  /// Assigns [categoryId] to every transaction matching [counterparty]
+  /// by the same loose "same real-world merchant" rule
+  /// [findSimilarUncategorized] uses (not just an exact string match),
+  /// and remembers the mapping for future auto-categorization on
+  /// ingest. This is what the Frequent Codes tab's edit flow should
+  /// call instead of the exact-match-only [categorizeCounterparty] —
+  /// see that method's doc and the confirmed real bug this fixes.
+  Future<void> categorizeCounterpartyEverywhere(String counterparty, int categoryId) async {
+    await categorizeCounterparty(counterparty, categoryId);
+
+    final group = await _findSimilarUncategorizedByName(counterparty);
+    if (group == null) return;
+    await categorizeGroup(group, categoryId);
   }
 
   /// Applies [categoryId] to [anchor] plus every transaction in
@@ -164,12 +238,20 @@ class CategorizationService {
   /// the edit action on the Frequent Codes screen. A code-to-category
   /// mapping row must exist to carry a display name, so both are always
   /// written together rather than as two independent actions.
+  ///
+  /// Uses [categorizeCounterpartyEverywhere], not the exact-match-only
+  /// [categorizeCounterparty] — this is the confirmed real bug fix
+  /// (spec #8): a real merchant's counterparty string isn't always
+  /// byte-identical across messages (e.g. a different trailing till
+  /// code each time), so categorizing "the code" from this screen must
+  /// sweep up every real-world-same-merchant variant, not just the one
+  /// exact string this particular [CodeUsage] row happened to rank on.
   Future<void> updateCode(
     String code, {
     required int categoryId,
     String? displayName,
   }) async {
-    await categorizeCounterparty(code, categoryId);
+    await categorizeCounterpartyEverywhere(code, categoryId);
     if (displayName != null && displayName.trim().isNotEmpty) {
       await _db.renameCodeDisplayName(code, displayName.trim());
     }

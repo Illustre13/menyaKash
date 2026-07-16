@@ -44,6 +44,26 @@ class SmsProcessor {
   final AccountsService _accounts;
   final MerchantNormalizationService _merchants;
 
+  /// Cached "Fees & Charges" category id (spec #3) — resolved once,
+  /// not once per fee row, since every fee-charge transaction this
+  /// processor writes uses the same category.
+  int? _feeCategoryId;
+
+  /// The default taxonomy (see [defaultCategorySeed]) always seeds
+  /// "Fees & Charges" on every install, but this looks it up by name
+  /// rather than assuming a fixed id — a user could rename it, and a
+  /// lookup-miss (e.g. a test database that never seeded categories at
+  /// all) degrades to `null`, which writes a real, uncategorized fee
+  /// transaction rather than throwing.
+  Future<int?> _resolveFeeCategoryId() async {
+    if (_feeCategoryId != null) return _feeCategoryId;
+    final category = await (_db.select(_db.categories)
+          ..where((tbl) => tbl.name.equals('Fees & Charges')))
+        .getSingleOrNull();
+    _feeCategoryId = category?.id;
+    return _feeCategoryId;
+  }
+
   /// Processes every currently-pending [SmsMessages] row. Returns how
   /// many were matched into a transaction vs. left unrecognized.
   Future<({int matched, int unrecognized})> processPending() async {
@@ -103,6 +123,7 @@ class SmsProcessor {
     var matched = 0;
     var unrecognized = 0;
     final accountCache = <int, Account>{};
+    final feeCategoryId = await _resolveFeeCategoryId();
 
     final smsIds = <int>[];
     for (final result in results) {
@@ -121,6 +142,13 @@ class SmsProcessor {
           );
       smsIds.add(smsId);
     }
+
+    // smsMessageId of every matched transaction this call wrote that
+    // has a real fee — batch.insert() doesn't return generated ids
+    // synchronously, so the fee-charge rows (spec #3) for these are
+    // created in a second pass below, looked back up by their unique
+    // smsMessageId rather than threaded through the batch.
+    final feeBearingSmsIds = <int>[];
 
     await _db.batch((batch) async {
       for (var i = 0; i < results.length; i++) {
@@ -177,8 +205,36 @@ class SmsProcessor {
             categoryId: Value(categoryId),
           ),
         );
+
+        if (parsed.fee > 0) feeBearingSmsIds.add(smsId);
       }
     });
+
+    if (feeBearingSmsIds.isNotEmpty) {
+      await _db.batch((batch) async {
+        for (final smsId in feeBearingSmsIds) {
+          final parent = await (_db.select(_db.transactions)
+                ..where((tbl) => tbl.smsMessageId.equals(smsId)))
+              .getSingle();
+          batch.insert(
+            _db.transactions,
+            TransactionsCompanion.insert(
+              providerId: Value(parent.providerId),
+              accountId: Value(parent.accountId),
+              parentTransactionId: Value(parent.id),
+              type: TransactionType.fee,
+              amount: parent.fee,
+              counterparty: Value(
+                parent.counterparty != null ? 'Fee for ${parent.counterparty}' : 'Transaction fee',
+              ),
+              timestamp: parent.timestamp,
+              rawSmsBody: parent.rawSmsBody,
+              categoryId: Value(feeCategoryId),
+            ),
+          );
+        }
+      });
+    }
 
     return (matched: matched, unrecognized: unrecognized);
   }
@@ -224,7 +280,7 @@ class SmsProcessor {
     final account = await _accounts.ensureAccountForProvider(detection.provider.id);
     final merchant = await _merchants.resolveMerchant(parsed.counterparty);
 
-    await _db.into(_db.transactions).insert(
+    final parentId = await _db.into(_db.transactions).insert(
           TransactionsCompanion.insert(
             smsMessageId: Value(message.id),
             providerId: Value(detection.provider.id),
@@ -242,6 +298,18 @@ class SmsProcessor {
           ),
         );
 
+    if (parsed.fee > 0) {
+      await _insertFeeTransaction(
+        parentId: parentId,
+        fee: parsed.fee,
+        accountId: account.id,
+        providerId: detection.provider.id,
+        counterparty: parsed.counterparty,
+        timestamp: parsed.timestamp,
+        rawSmsBody: message.body,
+      );
+    }
+
     await (_db.update(_db.smsMessages)..where((tbl) => tbl.id.equals(message.id))).write(
       SmsMessagesCompanion(
         providerId: Value(detection.provider.id),
@@ -249,6 +317,38 @@ class SmsProcessor {
       ),
     );
     return true;
+  }
+
+  /// Writes the fee-charge row for [parentId] (spec #3) — a real,
+  /// first-class [Transactions] row of type [TransactionType.fee],
+  /// categorized to "Fees & Charges," linked via
+  /// [Transactions.parentTransactionId]. Timestamped identically to the
+  /// parent (the SMS reports one moment for both the payment and its
+  /// fee) and attributed to the same account, since the fee was
+  /// deducted from that same wallet.
+  Future<int> _insertFeeTransaction({
+    required int parentId,
+    required double fee,
+    required int accountId,
+    required int providerId,
+    required String? counterparty,
+    required DateTime timestamp,
+    required String rawSmsBody,
+  }) async {
+    final feeCategoryId = await _resolveFeeCategoryId();
+    return _db.into(_db.transactions).insert(
+          TransactionsCompanion.insert(
+            providerId: Value(providerId),
+            accountId: Value(accountId),
+            parentTransactionId: Value(parentId),
+            type: TransactionType.fee,
+            amount: fee,
+            counterparty: Value(counterparty != null ? 'Fee for $counterparty' : 'Transaction fee'),
+            timestamp: timestamp,
+            rawSmsBody: rawSmsBody,
+            categoryId: Value(feeCategoryId),
+          ),
+        );
   }
 
   Future<void> _markUnrecognized(SmsMessage message, {int? providerId}) async {

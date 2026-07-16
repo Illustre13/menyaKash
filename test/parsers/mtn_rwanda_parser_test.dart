@@ -24,6 +24,22 @@ void main() {
     expect(result.balanceAfter, 18458);
   });
 
+  test(
+      'parses a real received-money message in MTN\'s newer 2026 format '
+      '(no "on your mobile money account" clause, "FT Id:" not "Financial '
+      'Transaction Id:", bare "Balance:" not "new balance:") — the fix for '
+      'the confirmed real stale-balance bug', () {
+    final result = parser.tryParse(_fixture('received_new_format'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.received);
+    expect(result.amount, 15000);
+    expect(result.counterparty, contains('Bertin NDAHAYO SINGIZWA'));
+    expect(result.txRef, '29059309550');
+    expect(result.balanceAfter, 19433,
+        reason: 'this exact class of message previously extracted a null balance, '
+            'the root cause of the reported stale-balance bug');
+  });
+
   test('extracts the real ISO-ish embedded date (year-first, not DD/MM/YYYY)', () {
     final result = parser.tryParse(_fixture('received'));
     expect(result, isNotNull);
@@ -64,6 +80,37 @@ void main() {
     expect(result.balanceAfter, 27551);
   });
 
+  test(
+      'parses a real sent-money message in MTN\'s newer 2026 format '
+      '(no "from ACCOUNT" clause, "Fee: 20RWF"/"Balance: 6353RWF" with no '
+      'space before RWF) — sender NEVER included an account-number clause '
+      'in this real message, confirming the old regex requiring one was '
+      'already stale', () {
+    final result = parser.tryParse(_fixture('sent_new_format'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.sent);
+    expect(result.amount, 1000);
+    expect(result.counterparty, contains('Jeremie NAYIGIZIKI'),
+        reason: 'the old regex required "from ACCOUNT" before "at TIMESTAMP" '
+            'and silently returned no counterparty for every real message in '
+            'this newer format');
+    expect(result.fee, 20);
+    expect(result.balanceAfter, 1423);
+  });
+
+  test(
+      'parses a real merchant payment message in MTN\'s newer 2026 format '
+      '("TxId:...*S*" prefix, "Balance: 1,293 RWF. Fee 0 RWF." suffix instead '
+      'of "Your new balance:... Fee was...")', () {
+    final result = parser.tryParse(_fixture('payment_new_format'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.payment);
+    expect(result.amount, 3000);
+    expect(result.counterparty, contains('METEX GARMENTS AND CREATIONS'));
+    expect(result.txRef, '29108373591');
+    expect(result.balanceAfter, 1293);
+  });
+
   test('parses a real merchant payment message (name+code as one opaque counterparty)', () {
     final result = parser.tryParse(_fixture('payment'));
     expect(result, isNotNull);
@@ -102,13 +149,41 @@ void main() {
     expect(result.balanceAfter, 4278);
   });
 
+  test(
+      'parses a real merchant-debit message in MTN\'s newer 2026 format '
+      '(no "on your MOMO account" clause between the merchant name and '
+      '"was completed")', () {
+    final result = parser.tryParse(_fixture('merchant_debit_new_format'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.payment);
+    expect(result.amount, 500);
+    expect(result.counterparty, contains('MTN RWANDACELL'));
+    expect(result.txRef, '29052982745');
+    expect(result.balanceAfter, 4433);
+  });
+
   test('parses a real airtime purchase (payment to literal "Airtime")', () {
     final result = parser.tryParse(_fixture('airtime'));
     expect(result, isNotNull);
     expect(result!.type, TransactionType.payment);
     expect(result.amount, 100);
-    expect(result.counterparty, contains('Airtime'));
+    expect(result.counterparty, 'Airtime',
+        reason: 'the "with token" tail must not leak into counterparty');
     expect(result.balanceAfter, 97467);
+  });
+
+  test('a Cash Power token payment keeps the token OUT of counterparty — '
+      'the fix for the confirmed real InvalidDataException crash', () {
+    // Modeled on the real crash report: the token + "External
+    // Transaction Id" span between the payee name and "has been
+    // completed" was being swallowed whole into counterparty, blowing
+    // Merchants' 128-char name cap during merchant resolution.
+    final result = parser.tryParse(_fixture('cash_power'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.payment);
+    expect(result.amount, 10000);
+    expect(result.counterparty, 'MTN Cash Power');
+    expect(result.balanceAfter, 87467);
   });
 
   test('a real failed-transaction message is NOT recorded as a transaction', () {

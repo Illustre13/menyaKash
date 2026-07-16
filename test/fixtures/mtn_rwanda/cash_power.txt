@@ -1,0 +1,1 @@
+*162*TxId:14900000001*S*Your payment of 10000 RWF to MTN Cash Power with token 1111-2222-3333-4444-5555 External Transaction Id: 987654321012345 has been completed at 2026-07-10 08:12:44. Fee was 0 RWF. Your new balance: 87467 RWF . Message: - -. *EN#

@@ -59,15 +59,33 @@ class MerchantNormalizationService {
     return noPunctuation.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
+  /// [Merchants.name]/[Merchants.normalizedName] are capped at 128
+  /// chars in the schema. No real merchant name observed anywhere in
+  /// the 8,364-message export comes near this — a longer string here
+  /// means a parser mis-extraction leaked message body into the
+  /// counterparty (the confirmed real case: a Cash Power token payload,
+  /// see MtnRwandaParser._paymentToField). Such a string is garbage as
+  /// merchant *identity*, so it's rejected rather than truncated:
+  /// truncating would mint a fake merchant row that a categorization
+  /// could then be attached to, silently mislabeling future
+  /// transactions. Returning null keeps the transaction itself fully
+  /// intact (counterparty text preserved, merchantId simply null).
+  static const _maxNameLength = 128;
+
   /// Finds or creates the [Merchants] row for [rawCounterparty],
   /// extracting the merchant name first. Returns null if
-  /// [rawCounterparty] is null/empty (nothing to resolve).
+  /// [rawCounterparty] is null/empty (nothing to resolve), or if the
+  /// extracted name exceeds the schema's 128-char cap (a parser
+  /// mis-extraction, never a real merchant — see [_maxNameLength]).
   Future<Merchant?> resolveMerchant(String? rawCounterparty) async {
     if (rawCounterparty == null || rawCounterparty.trim().isEmpty) return null;
 
     final name = extractMerchantName(rawCounterparty);
     final normalized = normalize(name);
     if (normalized.isEmpty) return null;
+    if (name.length > _maxNameLength || normalized.length > _maxNameLength) {
+      return null;
+    }
 
     final existing = await (_db.select(_db.merchants)
           ..where((tbl) => tbl.normalizedName.equals(normalized)))

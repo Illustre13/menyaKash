@@ -1,0 +1,112 @@
+@startuml splash
+' =====================================================================
+' Menya Kash — Splash Screen: branding, initialization states, routing
+' =====================================================================
+' Documents the launch experience for the Menya Kash brand identity
+' (sprint #15). Design-first documentation: the native Android splash
+' today is the plain Flutter LaunchTheme; this diagram is the contract
+' the implemented splash must satisfy.
+'
+' Brand elements shown during splash:
+'   - Logo:      assets/brand/menyacash.png (purple swoosh, orange dot)
+'   - Name:      Menya Kash
+'   - Tagline:   Understand Every Transaction.
+'   - Primary:   #7F56D9   (brand purple)
+'   - Secondary: #F5A623   (brand orange)
+'
+' The splash must communicate: trust, security, financial intelligence,
+' modern fintech identity.
+' =====================================================================
+
+skinparam backgroundColor #FCFCFB
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam ArrowColor #7F56D9
+skinparam state {
+  BackgroundColor #FFFFFF
+  BorderColor #7F56D9
+  FontColor #111827
+  StartColor #F5A623
+}
+skinparam note {
+  BackgroundColor #FDF4E3
+  BorderColor #F5A623
+}
+
+title Menya Kash — Splash & Launch Routing
+
+[*] --> SplashScreen : Application launch
+
+state SplashScreen {
+  state "Load Branding" as LoadBranding
+  LoadBranding : Logo mark (assets/brand/menyacash.png)
+  LoadBranding : Wordmark "Menya Kash"
+  LoadBranding : Tagline "Understand Every Transaction."
+  LoadBranding : Surface #FCFCFB / accents #7F56D9 + #F5A623
+}
+
+note right of SplashScreen
+  Entirely offline — no network call
+  can occur here or anywhere else:
+  the app declares no INTERNET
+  permission at all.
+end note
+
+SplashScreen --> InitializeApplication
+
+state InitializeApplication {
+  state "Initialize Database" as InitDb
+  InitDb : Open local drift/sqlite ("i_momo")
+  InitDb : Run pending schema migrations (v1..v5)
+
+  state "Load Theme Preference" as LoadTheme
+  LoadTheme : UserProfile.themeMode -> light | dark | system
+  LoadTheme : Null / never chose -> Light (product default)
+
+  state "Load User Profile" as LoadProfile
+  LoadProfile : Read the single UserProfile row
+  LoadProfile : onboardingCompletedAt decides routing below
+
+  state "Check App Lock" as CheckLock
+  CheckLock : UserProfile.appLockEnabled?
+  CheckLock : If enabled -> OS biometric/PIN prompt (local_auth)
+  CheckLock : Never a stored password — device lock only
+
+  InitDb --> LoadTheme
+  LoadTheme --> LoadProfile
+  LoadProfile --> CheckLock
+}
+
+InitializeApplication --> RouteUser : Navigation decision
+
+state RouteUser <<choice>>
+
+RouteUser --> Onboarding : First launch\n(onboardingCompletedAt == null)
+RouteUser --> Dashboard : Returning user\n(onboardingCompletedAt != null)
+
+state Onboarding {
+  state "Welcome" as W
+  state "Appearance (theme choice)" as A
+  state "Terms & Privacy" as T
+  state "Account Setup" as AC
+  state "Security Setup" as S
+  state "Provider Selection" as P
+  state "Permission Summary" as PS
+  state "SMS Setup + historical scan" as SMS
+  W --> A
+  A --> T
+  T --> AC
+  AC --> S
+  S --> P
+  P --> PS
+  PS --> SMS
+}
+
+Onboarding --> Dashboard : markOnboardingComplete()
+
+Dashboard : Overview card, wallet breakdown,
+Dashboard : spending charts, categorization progress
+
+Dashboard --> [*]
+
+@enduml

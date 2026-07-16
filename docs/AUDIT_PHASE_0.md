@@ -30,6 +30,7 @@ screens alive simultaneously (Overview / Pay / Categorize / Review).
 `showModalBottomSheet`/`showDialog`, not routes.
 
 **Data flow today (SMS → DB row):**
+
 ```
 SMS arrives (historical scan or live listener)
   → SmsIngestService._ingestOne(sender, body, receivedAt)
@@ -38,11 +39,13 @@ SMS arrives (historical scan or live listener)
   → match  → Transactions row (rawSmsBody kept verbatim, counterparty as one opaque string)
   → no match → UnparsedMessages row (body kept verbatim)
 ```
+
 No dedup, no cross-provider matching, no raw-event/normalized-transaction
 separation — SMS text is parsed directly into a `Transactions` row in one
 step. This is exactly the risk the spec's Phase 1 names.
 
 **Schema (drift, `schemaVersion = 1`, no migrations yet):**
+
 - `Categories(id, name UNIQUE)`
 - `CategoryCodes(id, code UNIQUE, displayName?, categoryId → Categories, CASCADE)`
 - `Transactions(id, provider TEXT, type ENUM, amount, fee, counterparty?, txRef?, balanceAfter?, timestamp, rawSmsBody, categoryId? → Categories)`
@@ -85,13 +88,13 @@ guesses** — the code's own comments say so (`mtn_rwanda_parser.dart:6-31`:
 export proves this is not a minor gap. Real MTN/`M-Money` traffic alone
 contains at least five structurally different message shapes:
 
-| Shape | Real example (redacted) |
-|---|---|
-| P2P transfer | `*165*S*5000 RWF transferred to NAME (250XXXXXXXXX) from 15568442 at 2024-04-15 19:54:02 . Fee was: 100 RWF. New balance: 27551 RWF.` |
-| Merchant payment | `TxId: 13571597197. Your payment of 9,283 RWF to HOPITAL LA CROIX DU SUD Ltd 100126 has been completed at 2024-04-16 20:29:00. Your new balance: 11,828 RWF. Fee was 0 RWF.` |
-| Alt payment (eKash/Airtime, same shortcode) | `*162*TxId:13559072472*S*Your payment of 500 RWF to eKash with token  has been completed at 2024-04-15 21:39:02. Fee was 20 RWF. Your new balance: 21931 RWF . Message: - ACSC. *EN#` |
-| Agent withdrawal | `You NAME (*********188) have via agent: Ruth IMANISHIMWE (250791519401), withdrawn 5000 RWF from your mobile money account: 15568442 at 2025-03-08 08:52:01 and you can now collect your money in cash. Your new balance: 2832 RWF. Fee paid: 250 RWF. ... Financial Transaction Id: 19394210820.` |
-| Bundle/data purchase | `*164*S*Y'ello,A transaction of 500 RWF by Data Bundle MTN on your MOMO account was successfully completed at 2025-06-24 19:20:36. ... Your new balance:2360 RWF. Fee was 0 RWF. Financial Transaction Id: 21338708265. External Transaction Id: 17507856022188973.*EN#` |
+| Shape                                       | Real example (redacted)                                                                                                                                                                                                                                                                               |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P2P transfer                                | `*165*S*5000 RWF transferred to NAME (250XXXXXXXXX) from 15568442 at 2024-04-15 19:54:02 . Fee was: 100 RWF. New balance: 27551 RWF.`                                                                                                                                                               |
+| Merchant payment                            | `TxId: 13571597197. Your payment of 9,283 RWF to HOPITAL LA CROIX DU SUD Ltd 100126 has been completed at 2024-04-16 20:29:00. Your new balance: 11,828 RWF. Fee was 0 RWF.`                                                                                                                        |
+| Alt payment (eKash/Airtime, same shortcode) | `*162*TxId:13559072472*S*Your payment of 500 RWF to eKash with token  has been completed at 2024-04-15 21:39:02. Fee was 20 RWF. Your new balance: 21931 RWF . Message: - ACSC. *EN#`                                                                                                               |
+| Agent withdrawal                            | `You NAME (*********188) have via agent: Ruth IMANISHIMWE (250791519401), withdrawn 5000 RWF from your mobile money account: 15568442 at 2025-03-08 08:52:01 and you can now collect your money in cash. Your new balance: 2832 RWF. Fee paid: 250 RWF. ... Financial Transaction Id: 19394210820.` |
+| Bundle/data purchase                        | `*164*S*Y'ello,A transaction of 500 RWF by Data Bundle MTN on your MOMO account was successfully completed at 2025-06-24 19:20:36. ... Your new balance:2360 RWF. Fee was 0 RWF. Financial Transaction Id: 21338708265. External Transaction Id: 17507856022188973.*EN#`                            |
 
 None of these match the currently-coded regex family. **The parser will
 misclassify or fail on the large majority of real MTN Rwanda SMS.** This is
@@ -109,13 +112,17 @@ Real distinct financial senders found in the export: `M-Money`, `AirtelMoney`
 / `AIRTELMONEY`, `BKeBANK`, `EQUITYBANK`, `MoKash`/`MoMo`, `Ekash`/`eKash`,
 `BK BANK`, `BRD`. Only one (`M-Money`, and only partially) has any parser
 today. Confirmed real Airtel Money format:
+
 ```
 *151*Txn ID CI240415.2137.A06010*R* You have received RWF 500 from NAME 250XXXXXXXXX in MTN RWANDA.Your NEW BALANCE isRWF 3320. *EN#
 ```
+
 Confirmed real Equity Bank format:
+
 ```
 20000.00 RWF was successfully sent to NAME 250XXXXXXXXX. MTN Ref. 541077019015. Ref. 541077019015 on 17/04/24 at 19:24:13 CAT. Charges 0.00 RWF
 ```
+
 This Equity message is a **real, confirmed instance of the exact transfer
 problem the spec's Phase 3 describes**: it references `MTN Ref. 541077019015`
 — an Equity-side bank debit that corresponds to a same-amount MTN-side credit
@@ -130,6 +137,7 @@ Traced end-to-end (parser → `ParsedTransaction.counterparty` →
 `Transactions.counterparty` → `CategoryCodes.code`): the entire matched
 free-text span is stored as one string, never split. Real examples from the
 export that would hit exactly this bug:
+
 - `"HOPITAL LA CROIX DU SUD Ltd 100126"`
 - `"RITE PHARMACY LTD 902850"`
 - `"Pacifique 08077"` (a person's name concatenated with a code)
@@ -200,18 +208,18 @@ greenfield, not a modification of something existing.
 
 ## 4. Technical Debt
 
-| Item | Detail |
-|---|---|
-| Parser coverage | 1 provider (MTN, partial), 1 template family recognized out of ≥5 confirmed real ones |
-| Provider modeling | String tag only, no table, no validation against a known-provider list |
-| Counterparty modeling | Opaque unstructured string, name+code conflated, no merchant normalization |
-| Transfer/duplicate detection | None; no unique constraints; no cross-provider correlation |
-| Account/wallet modeling | None; single global "balance" concept already fragile |
-| Threading | 100% main-isolate; scan of a real-sized inbox will jank |
-| Auth/identity | None exists; all onboarding/security/provider-linking work is net-new |
-| USSD recipient handling | No normalization layer; passes raw OS contact data through unchanged |
-| DB migrations | `schemaVersion = 1` with no migration path defined — any schema change from here needs a real migration strategy, not just editing the table classes |
-| Unmaintained deps | `telephony` package is archived/unmaintained upstream (already flagged in existing docs); required manual patches to its own `build.gradle` (namespace, JVM target, `compileSdk`) to build at all on current tooling — a real ongoing maintenance risk for a load-bearing dependency |
+| Item                         | Detail                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Parser coverage              | 1 provider (MTN, partial), 1 template family recognized out of ≥5 confirmed real ones                                                                                                                                                                                                      |
+| Provider modeling            | String tag only, no table, no validation against a known-provider list                                                                                                                                                                                                                      |
+| Counterparty modeling        | Opaque unstructured string, name+code conflated, no merchant normalization                                                                                                                                                                                                                  |
+| Transfer/duplicate detection | None; no unique constraints; no cross-provider correlation                                                                                                                                                                                                                                  |
+| Account/wallet modeling      | None; single global "balance" concept already fragile                                                                                                                                                                                                                                       |
+| Threading                    | 100% main-isolate; scan of a real-sized inbox will jank                                                                                                                                                                                                                                     |
+| Auth/identity                | None exists; all onboarding/security/provider-linking work is net-new                                                                                                                                                                                                                       |
+| USSD recipient handling      | No normalization layer; passes raw OS contact data through unchanged                                                                                                                                                                                                                        |
+| DB migrations                | `schemaVersion = 1` with no migration path defined — any schema change from here needs a real migration strategy, not just editing the table classes                                                                                                                                     |
+| Unmaintained deps            | `telephony` package is archived/unmaintained upstream (already flagged in existing docs); required manual patches to its own `build.gradle` (namespace, JVM target, `compileSdk`) to build at all on current tooling — a real ongoing maintenance risk for a load-bearing dependency |
 
 ---
 

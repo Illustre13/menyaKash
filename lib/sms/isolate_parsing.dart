@@ -118,25 +118,40 @@ List<ParsedSmsResult> parseChunk(ParseChunkInput input) {
 /// Isolate-safe mirror of `ProviderDetector.detect`'s matching logic —
 /// same sender-pattern + body-disambiguator rules, but reading from the
 /// in-memory [providers] snapshot instead of querying the database.
+///
+/// A candidate's body disambiguator is applied even when it's the ONLY
+/// sender match — this matters because the snapshot is now
+/// selection-filtered (spec #11): with only MTN MoMo enabled, an
+/// eKash-bodied `M-Money` message has exactly one candidate (MTN,
+/// `notContainsEkash`), and short-circuiting on "single candidate"
+/// would silently misattribute the unselected sibling's traffic to the
+/// selected provider. Instead the body rule fails and the message
+/// resolves to no provider — the same outcome the live listener path
+/// reaches by detecting against the full registry and then rejecting
+/// unselected providers.
 ProviderSnapshot? _detectProvider(RawSmsSnapshot sms, List<ProviderSnapshot> providers) {
   final candidates = providers.where((p) => p.senderPatterns.contains(sms.sender)).toList();
   if (candidates.isEmpty) return null;
-  if (candidates.length == 1) return candidates.single;
 
   final mentionsEkash = sms.body.toLowerCase().contains('ekash');
-  for (final candidate in candidates) {
-    final matches = switch (candidate.disambiguator) {
+  final satisfying = candidates.where((candidate) {
+    return switch (candidate.disambiguator) {
       DisambiguatorRule.containsEkash => mentionsEkash,
       DisambiguatorRule.notContainsEkash => !mentionsEkash,
-      DisambiguatorRule.none => false,
+      // "No body condition" — a provider with an unambiguous sender
+      // always satisfies its (absent) rule.
+      DisambiguatorRule.none => true,
     };
-    if (matches) return candidate;
-  }
-  // Mirrors ProviderDetector's fallback: an ambiguous sender with no
-  // matching disambiguator still resolves to a candidate (so the
-  // message is attributed to *some* provider) rather than being
-  // dropped — same fail-safe behavior as the live path.
-  return candidates.first;
+  }).toList();
+  if (satisfying.isNotEmpty) return satisfying.first;
+
+  // No candidate's body rule matched. With multiple sender-sharing
+  // candidates this mirrors ProviderDetector's ambiguous-sender
+  // fallback (attribute to *some* candidate rather than drop). With a
+  // single candidate it means the body belongs to a sender-sharing
+  // sibling that was filtered out of this selection-scoped snapshot —
+  // skip it (spec #11), never misattribute it.
+  return candidates.length > 1 ? candidates.first : null;
 }
 
 /// Mirrors `hashSmsMessage` in `lib/data/database.dart` exactly — same

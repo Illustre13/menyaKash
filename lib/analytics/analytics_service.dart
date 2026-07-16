@@ -93,10 +93,39 @@ const _inboundTypes = {
 /// calling out anywhere. Every method takes an optional [Period] to
 /// scope the query to a week/month/quarter/year window; omitting it
 /// covers all-time.
+///
+/// Every aggregate is exposed as a [Stream] (via `watchX`), not just a
+/// one-shot [Future] — confirmed real bug: categorizing a transaction
+/// from the Categorize screen updated the raw transaction list live
+/// (already `.watch()`-backed, see [CategorizationService.watchAll])
+/// but every chart/summary derived from this service stayed stale
+/// until the hosting screen was manually reopened, since a plain
+/// `Future` has no way to know a write happened elsewhere. Each
+/// `watchX` method watches [AppDatabase.transactions] (the table every
+/// aggregate here ultimately reads) via drift's own `.watch()` and
+/// re-runs the same aggregation logic on every emission — correct
+/// because these aggregates are cheap in-memory recomputations over a
+/// personal-finance-scale transaction count, not expensive joins that
+/// would need debouncing. The old `Future`-returning methods are kept
+/// for the few call sites (e.g. one-shot exports) that only need a
+/// snapshot, implemented as `watchX(...).first` so there is exactly one
+/// aggregation implementation per metric, not two to keep in sync.
 class AnalyticsService {
   AnalyticsService(this._db);
 
   final AppDatabase _db;
+
+  /// Fires whenever [AppDatabase.transactions] changes — the shared
+  /// trigger every `watchX` method below re-derives its aggregate from.
+  /// Categories/transfer-links changes reach the same transactions rows
+  /// via a write to `categoryId`/a new `TransferLinks` row referencing
+  /// them, which itself doesn't touch `transactions` — but every write
+  /// path in this app that creates a transfer link or assigns a
+  /// category (`TransferMatchingEngine`, `CategorizationService`) also
+  /// writes to the transaction row it's linking/categorizing, so
+  /// watching `transactions` alone is sufficient in practice.
+  Stream<void> _transactionsChanged() =>
+      _db.select(_db.transactions).watch().map((_) {});
 
   /// [received]/[deposit]/[sent]/[bankTransfer]/etc. totals here
   /// deliberately exclude any transaction linked as one side of an
@@ -105,40 +134,46 @@ class AnalyticsService {
   /// credit would otherwise be double-counted as unrelated
   /// income+expense instead of recognized as one internal movement of
   /// the user's own money (docs/AUDIT_PHASE_0.md §3.2).
-  Future<SpendSummary> summary({Period? period}) async {
-    final query = _db.select(_db.transactions);
-    _applyPeriod(query, period);
-    final rows = await query.get();
-    final linkedIds = await _linkedTransactionIds();
+  Future<SpendSummary> summary({Period? period}) => watchSummary(period: period).first;
 
-    var totalIn = 0.0;
-    var totalOut = 0.0;
-    DateTime? latestTimestamp;
-    double? latestBalance;
+  /// Reactive form of [summary] — see this class's doc for why every
+  /// aggregate here has one.
+  Stream<SpendSummary> watchSummary({Period? period}) {
+    return _transactionsChanged().asyncMap((_) async {
+      final query = _db.select(_db.transactions);
+      _applyPeriod(query, period);
+      final rows = await query.get();
+      final linkedIds = await _linkedTransactionIds();
 
-    for (final tx in rows) {
-      final isTransfer = linkedIds.contains(tx.id);
-      if (!isTransfer) {
-        if (_inboundTypes.contains(tx.type)) totalIn += tx.amount;
-        // Just tx.amount, not `amount + fee` (spec #3): a fee is now
-        // its own Transactions row (TransactionType.fee, already in
-        // _outboundTypes) with its own amount, counted on its own —
-        // adding tx.fee here too would double-count it.
-        if (_outboundTypes.contains(tx.type)) totalOut += tx.amount;
+      var totalIn = 0.0;
+      var totalOut = 0.0;
+      DateTime? latestTimestamp;
+      double? latestBalance;
+
+      for (final tx in rows) {
+        final isTransfer = linkedIds.contains(tx.id);
+        if (!isTransfer) {
+          if (_inboundTypes.contains(tx.type)) totalIn += tx.amount;
+          // Just tx.amount, not `amount + fee` (spec #3): a fee is now
+          // its own Transactions row (TransactionType.fee, already in
+          // _outboundTypes) with its own amount, counted on its own —
+          // adding tx.fee here too would double-count it.
+          if (_outboundTypes.contains(tx.type)) totalOut += tx.amount;
+        }
+
+        if (tx.balanceAfter != null &&
+            (latestTimestamp == null || tx.timestamp.isAfter(latestTimestamp))) {
+          latestTimestamp = tx.timestamp;
+          latestBalance = tx.balanceAfter;
+        }
       }
 
-      if (tx.balanceAfter != null &&
-          (latestTimestamp == null || tx.timestamp.isAfter(latestTimestamp))) {
-        latestTimestamp = tx.timestamp;
-        latestBalance = tx.balanceAfter;
-      }
-    }
-
-    return SpendSummary(
-      totalIn: totalIn,
-      totalOut: totalOut,
-      currentBalance: latestBalance,
-    );
+      return SpendSummary(
+        totalIn: totalIn,
+        totalOut: totalOut,
+        currentBalance: latestBalance,
+      );
+    });
   }
 
   /// Every transaction id that's one side of a recorded [TransferLinks]
@@ -159,47 +194,57 @@ class AnalyticsService {
 
   /// [summary] for [period] alongside the same-granularity previous
   /// period, for "vs last month" style deltas on the dashboard.
-  Future<PeriodComparison> summaryWithComparison(Period period) async {
-    final current = await summary(period: period);
-    final previous = await summary(period: period.previous);
-    return PeriodComparison(period: period, current: current, previous: previous);
+  Future<PeriodComparison> summaryWithComparison(Period period) =>
+      watchSummaryWithComparison(period).first;
+
+  Stream<PeriodComparison> watchSummaryWithComparison(Period period) {
+    return _transactionsChanged().asyncMap((_) async {
+      final current = await summary(period: period);
+      final previous = await summary(period: period.previous);
+      return PeriodComparison(period: period, current: current, previous: previous);
+    });
   }
 
   /// Spend grouped by category, outbound transactions only — this is
   /// what powers the "where did my money go" bar chart. Excludes
   /// internal-transfer transactions (see [summary] doc for why).
-  Future<List<CategorySpend>> spendByCategory({Period? period}) async {
-    final categoryName = _db.categories.name;
-    final amount = _db.transactions.amount;
-    final linkedIds = await _linkedTransactionIds();
+  Future<List<CategorySpend>> spendByCategory({Period? period}) =>
+      watchSpendByCategory(period: period).first;
 
-    final query = _db.selectOnly(_db.transactions)
-      ..addColumns([categoryName, amount.sum()])
-      ..join([
-        leftOuterJoin(
-          _db.categories,
-          _db.categories.id.equalsExp(_db.transactions.categoryId),
-        ),
-      ])
-      ..where(_db.transactions.type.isIn(_outboundTypes.map((t) => t.name)))
-      ..groupBy([categoryName]);
+  Stream<List<CategorySpend>> watchSpendByCategory({Period? period}) {
+    return _transactionsChanged().asyncMap((_) async {
+      final categoryName = _db.categories.name;
+      final amount = _db.transactions.amount;
+      final linkedIds = await _linkedTransactionIds();
 
-    if (linkedIds.isNotEmpty) {
-      query.where(_db.transactions.id.isNotIn(linkedIds));
-    }
-    if (period != null) {
-      query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
-          _db.transactions.timestamp.isSmallerThanValue(period.end));
-    }
+      final query = _db.selectOnly(_db.transactions)
+        ..addColumns([categoryName, amount.sum()])
+        ..join([
+          leftOuterJoin(
+            _db.categories,
+            _db.categories.id.equalsExp(_db.transactions.categoryId),
+          ),
+        ])
+        ..where(_db.transactions.type.isIn(_outboundTypes.map((t) => t.name)))
+        ..groupBy([categoryName]);
 
-    final rows = await query.get();
-    return rows
-        .map((row) => CategorySpend(
-              row.read(categoryName) ?? 'Uncategorized',
-              row.read(amount.sum()) ?? 0,
-            ))
-        .toList()
-      ..sort((a, b) => b.total.compareTo(a.total));
+      if (linkedIds.isNotEmpty) {
+        query.where(_db.transactions.id.isNotIn(linkedIds));
+      }
+      if (period != null) {
+        query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
+            _db.transactions.timestamp.isSmallerThanValue(period.end));
+      }
+
+      final rows = await query.get();
+      return rows
+          .map((row) => CategorySpend(
+                row.read(categoryName) ?? 'Uncategorized',
+                row.read(amount.sum()) ?? 0,
+              ))
+          .toList()
+        ..sort((a, b) => b.total.compareTo(a.total));
+    });
   }
 
   /// Outbound spend bucketed by calendar month, oldest first — powers the
@@ -207,32 +252,37 @@ class AnalyticsService {
   /// always shows a rolling window ending at the current month, so the
   /// user has a trend line regardless of which single period is focused.
   /// Excludes internal-transfer transactions (see [summary] doc).
-  Future<List<PeriodSpend>> monthlySpend({int months = 6}) async {
-    final now = DateTime.now();
-    final start = DateTime(now.year, now.month - months + 1, 1);
-    final linkedIds = await _linkedTransactionIds();
+  Future<List<PeriodSpend>> monthlySpend({int months = 6}) =>
+      watchMonthlySpend(months: months).first;
 
-    final rows = await (_db.select(_db.transactions)
-          ..where((tbl) =>
-              tbl.timestamp.isBiggerOrEqualValue(start) &
-              tbl.type.isIn(_outboundTypes.map((t) => t.name))))
-        .get();
+  Stream<List<PeriodSpend>> watchMonthlySpend({int months = 6}) {
+    return _transactionsChanged().asyncMap((_) async {
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month - months + 1, 1);
+      final linkedIds = await _linkedTransactionIds();
 
-    final buckets = <DateTime, double>{};
-    for (var i = 0; i < months; i++) {
-      final bucketStart = DateTime(start.year, start.month + i, 1);
-      buckets[bucketStart] = 0;
-    }
-    for (final tx in rows) {
-      if (linkedIds.contains(tx.id)) continue;
-      final bucketStart = DateTime(tx.timestamp.year, tx.timestamp.month, 1);
-      // Just tx.amount — see summary()'s doc for why fee is no longer
-      // added here (spec #3, fee rows count on their own now).
-      buckets[bucketStart] = (buckets[bucketStart] ?? 0) + tx.amount;
-    }
+      final rows = await (_db.select(_db.transactions)
+            ..where((tbl) =>
+                tbl.timestamp.isBiggerOrEqualValue(start) &
+                tbl.type.isIn(_outboundTypes.map((t) => t.name))))
+          .get();
 
-    final sortedKeys = buckets.keys.toList()..sort();
-    return sortedKeys.map((k) => PeriodSpend(k, buckets[k]!)).toList();
+      final buckets = <DateTime, double>{};
+      for (var i = 0; i < months; i++) {
+        final bucketStart = DateTime(start.year, start.month + i, 1);
+        buckets[bucketStart] = 0;
+      }
+      for (final tx in rows) {
+        if (linkedIds.contains(tx.id)) continue;
+        final bucketStart = DateTime(tx.timestamp.year, tx.timestamp.month, 1);
+        // Just tx.amount — see summary()'s doc for why fee is no longer
+        // added here (spec #3, fee rows count on their own now).
+        buckets[bucketStart] = (buckets[bucketStart] ?? 0) + tx.amount;
+      }
+
+      final sortedKeys = buckets.keys.toList()..sort();
+      return sortedKeys.map((k) => PeriodSpend(k, buckets[k]!)).toList();
+    });
   }
 
   /// Excludes internal-transfer transactions (see [summary] doc) — a
@@ -241,34 +291,42 @@ class AnalyticsService {
   Future<List<MapEntry<String, double>>> topCounterparties({
     int limit = 5,
     Period? period,
-  }) async {
-    final counterparty = _db.transactions.counterparty;
-    final amount = _db.transactions.amount;
-    final linkedIds = await _linkedTransactionIds();
+  }) =>
+      watchTopCounterparties(limit: limit, period: period).first;
 
-    final query = _db.selectOnly(_db.transactions)
-      ..addColumns([counterparty, amount.sum()])
-      ..where(_db.transactions.type.isIn(_outboundTypes.map((t) => t.name)) &
-          counterparty.isNotNull())
-      ..groupBy([counterparty])
-      ..orderBy([OrderingTerm.desc(amount.sum())])
-      ..limit(limit);
+  Stream<List<MapEntry<String, double>>> watchTopCounterparties({
+    int limit = 5,
+    Period? period,
+  }) {
+    return _transactionsChanged().asyncMap((_) async {
+      final counterparty = _db.transactions.counterparty;
+      final amount = _db.transactions.amount;
+      final linkedIds = await _linkedTransactionIds();
 
-    if (linkedIds.isNotEmpty) {
-      query.where(_db.transactions.id.isNotIn(linkedIds));
-    }
-    if (period != null) {
-      query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
-          _db.transactions.timestamp.isSmallerThanValue(period.end));
-    }
+      final query = _db.selectOnly(_db.transactions)
+        ..addColumns([counterparty, amount.sum()])
+        ..where(_db.transactions.type.isIn(_outboundTypes.map((t) => t.name)) &
+            counterparty.isNotNull())
+        ..groupBy([counterparty])
+        ..orderBy([OrderingTerm.desc(amount.sum())])
+        ..limit(limit);
 
-    final rows = await query.get();
-    return rows
-        .map((row) => MapEntry(
-              row.read(counterparty) ?? 'Unknown',
-              row.read(amount.sum()) ?? 0,
-            ))
-        .toList();
+      if (linkedIds.isNotEmpty) {
+        query.where(_db.transactions.id.isNotIn(linkedIds));
+      }
+      if (period != null) {
+        query.where(_db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
+            _db.transactions.timestamp.isSmallerThanValue(period.end));
+      }
+
+      final rows = await query.get();
+      return rows
+          .map((row) => MapEntry(
+                row.read(counterparty) ?? 'Unknown',
+                row.read(amount.sum()) ?? 0,
+              ))
+          .toList();
+    });
   }
 
   /// Counts categorized vs. total transactions, scoped to [period] if
@@ -277,26 +335,31 @@ class AnalyticsService {
   /// transfer never needs a spending category, but it's still a real
   /// ledger row, and this metric is about "how much of my data is
   /// triaged," not "how much did I spend."
-  Future<CategorizationRatio> categorizationRatio({Period? period}) async {
-    final totalQuery = _db.selectOnly(_db.transactions)
-      ..addColumns([_db.transactions.id.count()]);
-    final categorizedQuery = _db.selectOnly(_db.transactions)
-      ..addColumns([_db.transactions.id.count()])
-      ..where(_db.transactions.categoryId.isNotNull());
+  Future<CategorizationRatio> categorizationRatio({Period? period}) =>
+      watchCategorizationRatio(period: period).first;
 
-    if (period != null) {
-      final inPeriod = _db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
-          _db.transactions.timestamp.isSmallerThanValue(period.end);
-      totalQuery.where(inPeriod);
-      categorizedQuery.where(inPeriod);
-    }
+  Stream<CategorizationRatio> watchCategorizationRatio({Period? period}) {
+    return _transactionsChanged().asyncMap((_) async {
+      final totalQuery = _db.selectOnly(_db.transactions)
+        ..addColumns([_db.transactions.id.count()]);
+      final categorizedQuery = _db.selectOnly(_db.transactions)
+        ..addColumns([_db.transactions.id.count()])
+        ..where(_db.transactions.categoryId.isNotNull());
 
-    final totalCountExp = _db.transactions.id.count();
-    final total = await totalQuery.map((row) => row.read(totalCountExp)).getSingle();
-    final categorized =
-        await categorizedQuery.map((row) => row.read(totalCountExp)).getSingle();
+      if (period != null) {
+        final inPeriod = _db.transactions.timestamp.isBiggerOrEqualValue(period.start) &
+            _db.transactions.timestamp.isSmallerThanValue(period.end);
+        totalQuery.where(inPeriod);
+        categorizedQuery.where(inPeriod);
+      }
 
-    return CategorizationRatio(categorized: categorized ?? 0, total: total ?? 0);
+      final totalCountExp = _db.transactions.id.count();
+      final total = await totalQuery.map((row) => row.read(totalCountExp)).getSingle();
+      final categorized =
+          await categorizedQuery.map((row) => row.read(totalCountExp)).getSingle();
+
+      return CategorizationRatio(categorized: categorized ?? 0, total: total ?? 0);
+    });
   }
 
   void _applyPeriod(

@@ -68,8 +68,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Period _period = Period.containing(PeriodGranularity.month, DateTime.now());
 
   late Future<List<AccountSummary>> _accounts;
-  late Future<PeriodComparison> _summary;
-  late Future<List<CategorySpend>> _byCategory;
+  // Streams, not one-shot Futures (confirmed real bug: categorizing a
+  // transaction elsewhere never refreshed this preview chart/metrics
+  // until Home was reopened) — see AnalyticsService's class doc.
+  late Stream<PeriodComparison> _summary;
+  late Stream<List<CategorySpend>> _byCategory;
   late Future<List<BudgetStatus>> _budgets;
   late Future<UserProfileData?> _profile;
 
@@ -86,8 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _reload() {
     _accounts = widget.accountsService.allAccountSummaries();
-    _summary = widget.analytics.summaryWithComparison(_period);
-    _byCategory = widget.analytics.spendByCategory(period: _period);
+    _summary = widget.analytics.watchSummaryWithComparison(_period);
+    _byCategory = widget.analytics.watchSpendByCategory(period: _period);
     _budgets = widget.budgetService.statusesForMonth(DateTime.now());
     _profile = widget.profileService.currentProfile();
     _loadLookups();
@@ -216,8 +219,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   // One line each for In/Out (spec #7): a direction
                   // icon then the amount, side by side rather than
                   // stacked, so both fit without the card growing tall.
-                  FutureBuilder<PeriodComparison>(
-                    future: _summary,
+                  StreamBuilder<PeriodComparison>(
+                    stream: _summary,
                     builder: (context, snapshot) {
                       final s = snapshot.data?.current;
                       return Row(
@@ -242,8 +245,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  FutureBuilder<List<CategorySpend>>(
-                    future: _byCategory,
+                  StreamBuilder<List<CategorySpend>>(
+                    stream: _byCategory,
                     builder: (context, snapshot) {
                       final data = snapshot.data ?? const [];
                       if (data.isEmpty) {

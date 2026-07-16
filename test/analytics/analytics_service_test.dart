@@ -240,4 +240,52 @@ void main() {
       expect(ratio.categorized, 0);
     });
   });
+
+  group('reactive watch* streams (confirmed real bug: charts/metrics stayed stale after '
+      'categorizing a transaction elsewhere, since the old Future-based reads had no way '
+      'to know a write had happened)', () {
+    test('watchSpendByCategory emits a new value after a transaction is categorized', () async {
+      final categoryId =
+          await db.into(db.categories).insert(const CategoriesCompanion(name: Value('Food')));
+      final txId = await insertTx(
+        type: TransactionType.payment,
+        amount: 1000,
+        timestamp: DateTime(2026, 6, 1),
+      );
+
+      final emissions = <List<CategorySpend>>[];
+      final subscription = service.watchSpendByCategory().listen(emissions.add);
+      await pumpEventQueue();
+      expect(emissions.last.map((c) => (c.categoryName, c.total)), [('Uncategorized', 1000.0)]);
+
+      await (db.update(db.transactions)..where((tbl) => tbl.id.equals(txId)))
+          .write(TransactionsCompanion(categoryId: Value(categoryId)));
+      await pumpEventQueue();
+
+      expect(emissions.last.map((c) => (c.categoryName, c.total)), [('Food', 1000.0)],
+          reason: 'the stream must re-emit once the transaction is categorized, with no '
+              'manual refresh call needed — this is the exact bug being fixed');
+
+      await subscription.cancel();
+    });
+
+    test('watchSummary emits a new value after a new transaction is inserted', () async {
+      final emissions = <SpendSummary>[];
+      final subscription = service.watchSummary().listen(emissions.add);
+      await pumpEventQueue();
+      expect(emissions.last.totalOut, 0);
+
+      await insertTx(type: TransactionType.payment, amount: 5000, timestamp: DateTime(2026, 6, 1));
+      await pumpEventQueue();
+
+      expect(emissions.last.totalOut, 5000);
+      await subscription.cancel();
+    });
+
+    test('the Future-returning wrappers still return a single up-to-date snapshot', () async {
+      await insertTx(type: TransactionType.payment, amount: 2500, timestamp: DateTime(2026, 6, 1));
+      final summary = await service.summary();
+      expect(summary.totalOut, 2500);
+    });
+  });
 }

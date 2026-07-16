@@ -35,11 +35,16 @@ class _InsightsScreenState extends State<InsightsScreen> {
   Period _period = Period.containing(PeriodGranularity.month, DateTime.now());
   bool _showCategoryAsPie = true;
 
-  late Future<PeriodComparison> _comparison;
-  late Future<List<CategorySpend>> _byCategory;
-  late Future<List<PeriodSpend>> _monthly;
-  late Future<CategorizationRatio> _categorizationRatio;
-  late Future<List<MapEntry<String, double>>> _topMerchants;
+  // Streams, not one-shot Futures (confirmed real bug: categorizing a
+  // transaction updated the raw list live but this screen's charts/
+  // metrics stayed stale until manually reopened) — every widget below
+  // now uses StreamBuilder and repaints itself whenever the underlying
+  // transaction data actually changes, with no manual refresh needed.
+  late Stream<PeriodComparison> _comparison;
+  late Stream<List<CategorySpend>> _byCategory;
+  late Stream<List<PeriodSpend>> _monthly;
+  late Stream<CategorizationRatio> _categorizationRatio;
+  late Stream<List<MapEntry<String, double>>> _topMerchants;
 
   @override
   void initState() {
@@ -48,16 +53,18 @@ class _InsightsScreenState extends State<InsightsScreen> {
   }
 
   void _reload() {
-    _comparison = widget.analytics.summaryWithComparison(_period);
-    _byCategory = widget.analytics.spendByCategory(period: _period);
-    _monthly = widget.analytics.monthlySpend();
-    _categorizationRatio = widget.analytics.categorizationRatio(period: _period);
-    _topMerchants = widget.analytics.topCounterparties(limit: 5, period: _period);
+    _comparison = widget.analytics.watchSummaryWithComparison(_period);
+    _byCategory = widget.analytics.watchSpendByCategory(period: _period);
+    _monthly = widget.analytics.watchMonthlySpend();
+    _categorizationRatio = widget.analytics.watchCategorizationRatio(period: _period);
+    _topMerchants = widget.analytics.watchTopCounterparties(limit: 5, period: _period);
   }
 
   Future<void> _refresh() async {
+    // Pull-to-refresh here mainly re-scopes the period-dependent streams
+    // (in case the wall-clock has moved into a new period); the streams
+    // themselves already stay live between manual refreshes.
     setState(_reload);
-    await Future.wait([_comparison, _byCategory, _monthly, _categorizationRatio, _topMerchants]);
   }
 
   void _setGranularity(PeriodGranularity granularity) {
@@ -105,8 +112,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
               onNext: canGoNext ? _goToNext : null,
             ),
             const SizedBox(height: 16),
-            FutureBuilder<PeriodComparison>(
-              future: _comparison,
+            StreamBuilder<PeriodComparison>(
+              stream: _comparison,
               builder: (context, snapshot) {
                 return _SummaryRow(comparison: snapshot.data, currency: currency);
               },
@@ -124,8 +131,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
               ],
             ),
             const SizedBox(height: 4),
-            FutureBuilder<List<CategorySpend>>(
-              future: _byCategory,
+            StreamBuilder<List<CategorySpend>>(
+              stream: _byCategory,
               builder: (context, snapshot) {
                 final data = snapshot.data ?? const [];
                 if (data.isEmpty) {
@@ -137,8 +144,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
               },
             ),
             const SizedBox(height: 16),
-            FutureBuilder<CategorizationRatio>(
-              future: _categorizationRatio,
+            StreamBuilder<CategorizationRatio>(
+              stream: _categorizationRatio,
               builder: (context, snapshot) {
                 final ratio = snapshot.data;
                 if (ratio == null) return const SizedBox.shrink();
@@ -151,8 +158,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
             const SizedBox(height: 28),
             Text('Spending over time', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            FutureBuilder<List<PeriodSpend>>(
-              future: _monthly,
+            StreamBuilder<List<PeriodSpend>>(
+              stream: _monthly,
               builder: (context, snapshot) {
                 final data = snapshot.data ?? const [];
                 if (data.every((p) => p.total == 0)) {
@@ -164,8 +171,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
             const SizedBox(height: 28),
             Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
-            FutureBuilder<List<MapEntry<String, double>>>(
-              future: _topMerchants,
+            StreamBuilder<List<MapEntry<String, double>>>(
+              stream: _topMerchants,
               builder: (context, snapshot) {
                 final data = snapshot.data ?? const [];
                 if (data.isEmpty) {

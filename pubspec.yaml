@@ -30,6 +30,12 @@ dependencies:
   # USSD quick-dial: builds tel: URIs and hands off to the native dialer.
   url_launcher: ^6.2.5
 
+  # OS share sheet for the referral screen (spec #6) — hands off to
+  # whatever the user already has installed (SMS/WhatsApp/etc), same
+  # category as url_launcher above: no network capability of its own,
+  # no new permission, this app never sees where it went.
+  share_plus: ^10.0.0
+
   # Runtime permission requests (READ_SMS / RECEIVE_SMS / contacts).
   permission_handler: ^11.3.0
 
@@ -62,6 +68,18 @@ dev_dependencies:
   # v1-shaped database (raw SQL) and prove the v1->v2 upgrade migration
   # backfills it correctly — otherwise only a transitive dep via drift.
   sqlite3: ^2.4.0
+
+  # Dev-time generator only (never shipped): produces the Android
+  # launcher mipmaps from the Menya Kash brand asset. Re-run
+  # `dart run flutter_launcher_icons` after changing the logo.
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/brand/menyacash_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/brand/menyacash_foreground.png"
 
 flutter:
   uses-material-design: true

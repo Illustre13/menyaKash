@@ -1,11 +1,11 @@
 {
-    "name": "Menya Cash",
-    "short_name": "Menya Cash",
+    "name": "Menya Kash",
+    "short_name": "Menya Kash",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#FCFCFB",
     "theme_color": "#7F56D9",
-    "description": "Menya Cash — offline mobile money spending tracker (web dev preview).",
+    "description": "Menya Kash — offline mobile money spending tracker (web dev preview).",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

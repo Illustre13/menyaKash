@@ -52,3 +52,6 @@ app.*.map.json
 /public
 /docs/PHASE_COMMIT_PLAN.md
 /docs/PHASE_05_07.md
+/docs/review_prompt_#004.md
+
+assets/follow_along

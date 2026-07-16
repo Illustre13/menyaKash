@@ -3,21 +3,25 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'analytics/analytics_service.dart';
+import 'budgets/budget_service.dart';
 import 'categorization/categorization_service.dart';
 import 'contacts/contacts_service.dart';
+import 'contacts/favorite_contacts_service.dart';
 import 'data/database.dart';
 import 'parsers/momo_parser_registry.dart';
+import 'profile/referral_service.dart';
 import 'profile/user_profile_service.dart';
 import 'providers/provider_detector_factory.dart';
 import 'providers/provider_selection_service.dart';
-import 'screens/categorize_screen.dart';
-import 'screens/dashboard_screen.dart';
+import 'screens/budgets_screen.dart';
+import 'screens/home_screen.dart';
+import 'screens/insights_screen.dart';
 import 'screens/onboarding/onboarding_flow_screen.dart';
-import 'screens/pay_screen.dart';
-import 'screens/review_unparsed_screen.dart';
+import 'screens/transactions_screen.dart';
 import 'sms/sms_ingest_service.dart';
 import 'sms/sms_processor.dart';
 import 'theme/app_theme.dart';
+import 'theme/theme_controller.dart';
 import 'transfers/transfer_matching_engine.dart';
 import 'accounts/accounts_service.dart';
 
@@ -30,11 +34,16 @@ class IMomoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Menya Cash',
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      home: const HomeShell(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: ThemeController.mode,
+      builder: (context, themeMode, _) => MaterialApp(
+        title: 'Menya Kash',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: themeMode,
+        home: const HomeShell(),
+      ),
     );
   }
 }
@@ -60,7 +69,11 @@ class _HomeShellState extends State<HomeShell> {
   late final _accountsService = AccountsService(_db);
   late final _profileService = UserProfileService(_db);
   late final _providerSelectionService = ProviderSelectionService(_db, _accountsService);
+  late final _budgetService = BudgetService(_db);
+  late final _themeController = ThemeController(_profileService);
   final _contactsService = ContactsService();
+  late final _favoriteContactsService = FavoriteContactsService(_db);
+  late final _referralService = ReferralService(_db);
 
   int _index = 0;
 
@@ -83,6 +96,10 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<void> _checkOnboardingStatus() async {
+    // Apply the persisted theme before anything renders behind the
+    // loading state — a dark-theme user shouldn't get a light flash on
+    // every launch (sprint #3).
+    await _themeController.loadSaved();
     final onboarded = await _profileService.hasCompletedOnboarding();
     if (onboarded) {
       // Historical scan already happened during onboarding: just resume
@@ -124,24 +141,36 @@ class _HomeShellState extends State<HomeShell> {
         ingestService: _ingestService,
         profileService: _profileService,
         providerSelectionService: _providerSelectionService,
+        themeController: _themeController,
         onComplete: _onOnboardingComplete,
       );
     }
 
+    // Four calm tabs (UI redesign): Home / Transactions / Budgets /
+    // Insights. Pay is a Home quick action (pushed route); the
+    // code-bank and unparsed-review tooling live behind the
+    // Transactions app bar; Profile hangs off Home's app bar.
     final screens = [
-      DashboardScreen(
+      HomeScreen(
         analytics: _analyticsService,
-        profileService: _profileService,
         accountsService: _accountsService,
-        providerSelectionService: _providerSelectionService,
-        onReviewUncategorized: () => setState(() => _index = 2),
-      ),
-      PayScreen(
-        contactsService: _contactsService,
+        budgetService: _budgetService,
         categorizationService: _categorizationService,
+        contactsService: _contactsService,
+        favoriteContactsService: _favoriteContactsService,
+        profileService: _profileService,
+        providerSelectionService: _providerSelectionService,
+        referralService: _referralService,
+        onOpenTransactions: () => setState(() => _index = 1),
+        onOpenBudgets: () => setState(() => _index = 2),
+        onOpenInsights: () => setState(() => _index = 3),
       ),
-      CategorizeScreen(service: _categorizationService),
-      ReviewUnparsedScreen(db: _db),
+      TransactionsScreen(db: _db, categorizationService: _categorizationService),
+      BudgetsScreen(budgetService: _budgetService),
+      InsightsScreen(
+        analytics: _analyticsService,
+        onReviewUncategorized: () => setState(() => _index = 1),
+      ),
     ];
 
     return Scaffold(
@@ -150,10 +179,10 @@ class _HomeShellState extends State<HomeShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Overview'),
-          NavigationDestination(icon: Icon(Icons.send_outlined), label: 'Pay'),
-          NavigationDestination(icon: Icon(Icons.label_outline), label: 'Categorize'),
-          NavigationDestination(icon: Icon(Icons.rule_folder_outlined), label: 'Review'),
+          NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Transactions'),
+          NavigationDestination(icon: Icon(Icons.track_changes), label: 'Budgets'),
+          NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),
         ],
       ),
     );

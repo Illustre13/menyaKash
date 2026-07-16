@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../categorization/categorization_service.dart';
+import '../categorization/category_taxonomy.dart';
 import '../data/database.dart';
+import 'widgets/skeleton_list.dart';
+import 'widgets/transaction_tile.dart';
 
 /// The "code bank" teaching moment. Four tabs:
 ///  - Uncategorized: transactions with no category yet, the main queue.
@@ -53,8 +55,16 @@ class _CategorizeScreenState extends State<CategorizeScreen>
       body: TabBarView(
         controller: _tabController,
         children: [
-          _UncategorizedTab(service: widget.service),
-          _AllTransactionsTab(service: widget.service),
+          _TransactionListTab(
+            service: widget.service,
+            stream: widget.service.watchUncategorized(),
+            emptyMessage: 'Everything is categorized.',
+          ),
+          _TransactionListTab(
+            service: widget.service,
+            stream: widget.service.watchAll(),
+            emptyMessage: 'No transactions yet.',
+          ),
           _FrequentCodesTab(service: widget.service),
           _ManageCategoriesTab(service: widget.service),
         ],
@@ -63,83 +73,75 @@ class _CategorizeScreenState extends State<CategorizeScreen>
   }
 }
 
-class _UncategorizedTab extends StatelessWidget {
-  const _UncategorizedTab({required this.service});
+/// Shared body for the Uncategorized / All tabs (sprint #12): the
+/// lookup maps (category/provider/account names) load ONCE per tab
+/// build and are shared by every [TransactionTile] — the previous
+/// implementation ran a FutureBuilder + category query per visible
+/// row. Skeleton rows show while either the lookups or the first
+/// stream event are still loading (sprint #13).
+class _TransactionListTab extends StatefulWidget {
+  const _TransactionListTab({
+    required this.service,
+    required this.stream,
+    required this.emptyMessage,
+  });
 
   final CategorizationService service;
+  final Stream<List<Transaction>> stream;
+  final String emptyMessage;
 
   @override
-  Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RWF ', decimalDigits: 0);
-
-    return StreamBuilder<List<Transaction>>(
-      stream: service.watchUncategorized(),
-      builder: (context, snapshot) {
-        final items = snapshot.data ?? const [];
-        if (items.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('Everything is categorized.'),
-            ),
-          );
-        }
-        return ListView.separated(
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final tx = items[index];
-            return ListTile(
-              title: Text(tx.counterparty ?? tx.type.name),
-              subtitle: Text('${currency.format(tx.amount)} · ${tx.type.name}'),
-              trailing: TextButton(
-                child: const Text('Categorize'),
-                onPressed: () => _pickCategoryForTransaction(context, service, tx),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
+  State<_TransactionListTab> createState() => _TransactionListTabState();
 }
 
-class _AllTransactionsTab extends StatelessWidget {
-  const _AllTransactionsTab({required this.service});
+class _TransactionListTabState extends State<_TransactionListTab> {
+  late Future<TransactionTileContext> _lookups = _loadLookups();
 
-  final CategorizationService service;
+  Future<TransactionTileContext> _loadLookups() async {
+    return TransactionTileContext(
+      categoryNames: await widget.service.categoryNamesById(),
+      providerNames: await widget.service.providerNamesById(),
+      accountLabels: await widget.service.accountLabelsById(),
+    );
+  }
+
+  Future<void> _edit(Transaction tx) async {
+    await _pickCategoryForTransaction(context, widget.service, tx);
+    // A new category may have been created during the flow — refresh
+    // the name map so its badge renders immediately.
+    if (mounted) setState(() => _lookups = _loadLookups());
+  }
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: 'RWF ', decimalDigits: 0);
-
-    return StreamBuilder<List<Transaction>>(
-      stream: service.watchAll(),
-      builder: (context, snapshot) {
-        final items = snapshot.data ?? const [];
-        if (items.isEmpty) {
-          return const Center(child: Text('No transactions yet.'));
-        }
-        return ListView.separated(
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final tx = items[index];
-            return FutureBuilder<Category?>(
-              future: tx.categoryId == null
-                  ? Future.value(null)
-                  : service.categoryById(tx.categoryId!),
-              builder: (context, catSnapshot) {
-                final categoryLabel = catSnapshot.data?.name ?? 'Uncategorized';
-                return ListTile(
-                  title: Text(tx.counterparty ?? tx.type.name),
-                  subtitle: Text(
-                    '${currency.format(tx.amount)} · ${tx.type.name} · $categoryLabel',
-                  ),
-                  trailing: TextButton(
-                    child: const Text('Edit'),
-                    onPressed: () => _pickCategoryForTransaction(context, service, tx),
-                  ),
+    return FutureBuilder<TransactionTileContext>(
+      future: _lookups,
+      builder: (context, lookupSnapshot) {
+        final lookups = lookupSnapshot.data;
+        return StreamBuilder<List<Transaction>>(
+          stream: widget.stream,
+          builder: (context, snapshot) {
+            if (lookups == null || snapshot.connectionState == ConnectionState.waiting) {
+              return const SkeletonList();
+            }
+            final items = snapshot.data ?? const [];
+            if (items.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(widget.emptyMessage, textAlign: TextAlign.center),
+                ),
+              );
+            }
+            return ListView.separated(
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const Divider(height: 1, indent: 68),
+              itemBuilder: (context, index) {
+                final tx = items[index];
+                return TransactionTile(
+                  tx: tx,
+                  lookups: lookups,
+                  onEditCategory: () => _edit(tx),
                 );
               },
             );
@@ -246,7 +248,24 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Choose a category', style: Theme.of(context).textTheme.titleMedium),
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Icon(Icons.label_outline, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Choose a category', style: Theme.of(context).textTheme.titleMedium),
+              ],
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -302,6 +321,9 @@ class _FrequentCodesTabState extends State<_FrequentCodesTab> {
     return FutureBuilder<List<CodeUsage>>(
       future: _usage,
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SkeletonList();
+        }
         final items = snapshot.data ?? const [];
         if (items.isEmpty) {
           return const Center(
@@ -490,6 +512,9 @@ class _ManageCategoriesTabState extends State<_ManageCategoriesTab> {
     return FutureBuilder<List<Category>>(
       future: _categories,
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SkeletonList(rows: 5);
+        }
         final categories = snapshot.data ?? const [];
         if (categories.isEmpty) {
           return const Center(
@@ -509,6 +534,7 @@ class _ManageCategoriesTabState extends State<_ManageCategoriesTab> {
           itemBuilder: (context, index) {
             final category = categories[index];
             return ListTile(
+              leading: CategoryAvatar(categoryName: category.name, size: 36),
               title: Text(category.name),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,

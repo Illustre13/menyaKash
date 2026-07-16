@@ -164,10 +164,44 @@ class _ScanningStep extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '${p.matchedTransactions} MoMo transaction'
+            '${p.matchedTransactions} transaction'
             '${p.matchedTransactions == 1 ? '' : 's'} found so far',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          // Per-provider breakdown (spec #1): only worth showing once
+          // more than one provider is actually selected — with a
+          // single provider the total above already says the same
+          // thing, so a one-row "breakdown" would be pure noise.
+          if (p.matchedByProvider.length > 1) ...[
+            const SizedBox(height: 16),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  children: [
+                    for (final entry in p.matchedByProvider.entries)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(entry.key, style: Theme.of(context).textTheme.bodyMedium),
+                            Text(
+                              '${entry.value}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ] else
           Text(
             'Reading inbox…',
@@ -197,7 +231,7 @@ class _DeniedStep extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          'i-momo can\'t read your MoMo messages without this permission, '
+          'Menya Kash can\'t read your MoMo messages without this permission, '
           'so it has nothing to show you. You can grant it from your '
           'phone\'s app settings, or try again below.',
           style: Theme.of(context).textTheme.bodyMedium,

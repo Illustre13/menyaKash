@@ -4,9 +4,12 @@ import 'package:local_auth/local_auth.dart';
 import '../../data/database.dart';
 import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
+import '../../theme/provider_assets.dart';
+import '../../theme/theme_controller.dart';
 
-/// Settings (spec Phase 7): Security, Financial Providers, and Data
-/// sections, reached from the Profile screen.
+/// Settings (spec Phase 7, extended in the UI sprint): Appearance,
+/// Security, Financial Providers, and Data sections, reached from the
+/// Profile screen.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -23,9 +26,15 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _localAuth = LocalAuthentication();
+  late final _themeController = ThemeController(widget.profileService);
 
   UserProfileData? _profile;
   List<ProviderSelectionOption>? _providerOptions;
+
+  Future<void> _setTheme(ThemeMode mode) async {
+    await _themeController.setMode(mode);
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
@@ -60,7 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     final confirmed = await _localAuth.authenticate(
-      localizedReason: 'Confirm to enable App Lock for i-momo',
+      localizedReason: 'Confirm to enable App Lock for Menya Kash',
       options: const AuthenticationOptions(biometricOnly: false),
     );
     if (confirmed) {
@@ -89,10 +98,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                const _SectionHeader('Appearance'),
+                RadioGroup<ThemeMode>(
+                  groupValue: ThemeController.mode.value,
+                  onChanged: (mode) => _setTheme(mode!),
+                  child: const Column(
+                    children: [
+                      RadioListTile<ThemeMode>(
+                        title: Text('Light'),
+                        value: ThemeMode.light,
+                      ),
+                      RadioListTile<ThemeMode>(
+                        title: Text('Dark'),
+                        value: ThemeMode.dark,
+                      ),
+                      RadioListTile<ThemeMode>(
+                        title: Text('System'),
+                        subtitle: Text('Follow your phone\'s setting'),
+                        value: ThemeMode.system,
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
                 const _SectionHeader('Security'),
                 SwitchListTile(
                   title: const Text('App Lock'),
-                  subtitle: const Text('Require fingerprint, face, PIN, or pattern to open i-momo'),
+                  subtitle: const Text('Require fingerprint, face, PIN, or pattern to open Menya Kash'),
                   value: profile.appLockEnabled,
                   onChanged: _toggleAppLock,
                 ),
@@ -108,6 +140,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Text('Connected Services'),
                 ),
                 ...providerOptions.map((option) => SwitchListTile(
+                      secondary: ProviderLogo(
+                        providerCode: option.provider.code,
+                        displayName: option.provider.displayName,
+                        size: 36,
+                      ),
                       title: Text(option.provider.displayName),
                       value: option.isSelected,
                       onChanged: (value) => _toggleProvider(option.provider.id, value),

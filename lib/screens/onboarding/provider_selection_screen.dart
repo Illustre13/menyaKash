@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../../data/database.dart';
 import '../../providers/provider_selection_service.dart';
+import '../../theme/provider_assets.dart';
 
-/// Onboarding step 5 (spec Phase 6, Screen 4): the user explicitly
-/// selects which financial providers they use, grouped as "Mobile
-/// Money" and "Banks". This selection is the real gate for which
-/// [Accounts] rows exist from schemaVersion 4 onward — see
-/// [ProviderSelectionService] and [UserFinancialSources].
+/// Onboarding Financial Provider Setup (spec Phase 6, redesigned in
+/// the UI sprint's #8): branded provider cards grouped as Mobile Money
+/// / Banks. MTN MoMo starts selected by default on a fresh install
+/// (it's the overwhelmingly common case in Rwanda); everything else is
+/// opt-in. This selection is the real gate for which [Accounts] rows
+/// exist and which providers' SMS get scanned — see
+/// [ProviderSelectionService] and `snapshotSelectedProviders`.
 class ProviderSelectionScreen extends StatefulWidget {
   const ProviderSelectionScreen({
     super.key,
@@ -39,6 +42,12 @@ class _ProviderSelectionScreenState extends State<ProviderSelectionScreen> {
     setState(() {
       _options = options;
       _selected.addAll(options.where((o) => o.isSelected).map((o) => o.provider.id));
+      // Fresh install, nothing chosen yet: pre-select MTN MoMo (sprint
+      // #8 default). Returning users keep exactly their saved set.
+      if (_selected.isEmpty) {
+        final mtn = options.where((o) => o.provider.code == 'mtn_momo_rw');
+        if (mtn.isNotEmpty) _selected.add(mtn.first.provider.id);
+      }
     });
   }
 
@@ -48,6 +57,14 @@ class _ProviderSelectionScreenState extends State<ProviderSelectionScreen> {
     if (!mounted) return;
     widget.onContinue();
   }
+
+  void _toggle(int providerId, bool value) => setState(() {
+        if (value) {
+          _selected.add(providerId);
+        } else {
+          _selected.remove(providerId);
+        }
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -64,36 +81,15 @@ class _ProviderSelectionScreenState extends State<ProviderSelectionScreen> {
                       padding: const EdgeInsets.all(24),
                       children: [
                         Text(
-                          'Which of these do you use? You can add or remove '
-                          'providers later in Settings.',
+                          'Which of these do you use? Only messages from '
+                          'providers you enable are scanned. You can change '
+                          'this anytime in Settings.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
-                        const SizedBox(height: 16),
-                        _ProviderGroup(
-                          title: 'Mobile Money',
-                          options: options.where((o) => o.provider.category == 'mobile_money'),
-                          selected: _selected,
-                          onToggle: (id, value) => setState(() {
-                            if (value) {
-                              _selected.add(id);
-                            } else {
-                              _selected.remove(id);
-                            }
-                          }),
-                        ),
-                        const SizedBox(height: 16),
-                        _ProviderGroup(
-                          title: 'Banks',
-                          options: options.where((o) => o.provider.category == 'bank'),
-                          selected: _selected,
-                          onToggle: (id, value) => setState(() {
-                            if (value) {
-                              _selected.add(id);
-                            } else {
-                              _selected.remove(id);
-                            }
-                          }),
-                        ),
+                        const SizedBox(height: 20),
+                        ..._group(context, 'Mobile Money', options, 'mobile_money'),
+                        const SizedBox(height: 20),
+                        ..._group(context, 'Banks', options, 'bank'),
                       ],
                     ),
                   ),
@@ -121,43 +117,81 @@ class _ProviderSelectionScreenState extends State<ProviderSelectionScreen> {
       ),
     );
   }
+
+  List<Widget> _group(
+    BuildContext context,
+    String title,
+    List<ProviderSelectionOption> options,
+    String category,
+  ) {
+    final entries = options.where((o) => o.provider.category == category).toList();
+    if (entries.isEmpty) return const [];
+    return [
+      Text(title, style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 10),
+      for (final option in entries) ...[
+        _ProviderCard(
+          code: option.provider.code,
+          name: option.provider.displayName,
+          selected: _selected.contains(option.provider.id),
+          onChanged: (value) => _toggle(option.provider.id, value),
+        ),
+        const SizedBox(height: 10),
+      ],
+    ];
+  }
 }
 
-class _ProviderGroup extends StatelessWidget {
-  const _ProviderGroup({
-    required this.title,
-    required this.options,
+class _ProviderCard extends StatelessWidget {
+  const _ProviderCard({
+    required this.code,
+    required this.name,
     required this.selected,
-    required this.onToggle,
+    required this.onChanged,
   });
 
-  final String title;
-  final Iterable<ProviderSelectionOption> options;
-  final Set<int> selected;
-  final void Function(int providerId, bool value) onToggle;
+  final String code;
+  final String name;
+  final bool selected;
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final list = options.toList();
-    if (list.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: list.map((option) {
-            final isSelected = selected.contains(option.provider.id);
-            return FilterChip(
-              label: Text(option.provider.displayName),
-              selected: isSelected,
-              onSelected: (value) => onToggle(option.provider.id, value),
-            );
-          }).toList(),
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: selected ? scheme.primary.withValues(alpha: 0.08) : scheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () => onChanged(!selected),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? scheme.primary : scheme.outlineVariant.withValues(alpha: 0.4),
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              ProviderLogo(providerCode: code, displayName: name),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  name,
+                  style:
+                      Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              Icon(
+                selected ? Icons.check_circle : Icons.circle_outlined,
+                color: selected ? scheme.primary : scheme.outlineVariant,
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 }

@@ -2,51 +2,44 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../accounts/accounts_service.dart';
 import '../analytics/analytics_service.dart';
 import '../analytics/chart_palette.dart';
 import '../analytics/period.dart';
-import '../profile/user_profile_service.dart';
-import '../providers/provider_selection_service.dart';
 import '../theme/app_theme.dart';
 import 'dashboard/categorization_progress.dart';
-import 'dashboard/overview_card.dart';
-import 'dashboard/wallet_breakdown.dart';
-import 'profile/profile_screen.dart';
 
-class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({
+/// The Insights tab (UI redesign): the app's analytics home — period
+/// selector, income/expense summary with delta, category pie/bar,
+/// categorization progress, spending trend, and top merchants. The
+/// balance hero and profile entry point live on Home; this screen is
+/// purely "where did my money go."
+class InsightsScreen extends StatefulWidget {
+  const InsightsScreen({
     super.key,
     required this.analytics,
-    required this.profileService,
-    required this.accountsService,
-    required this.providerSelectionService,
     this.onReviewUncategorized,
   });
 
   final AnalyticsService analytics;
-  final UserProfileService profileService;
-  final AccountsService accountsService;
-  final ProviderSelectionService providerSelectionService;
 
   /// Called when the categorization-progress indicator is tapped —
-  /// wired by `HomeShell` to switch to the Categorize tab, since
-  /// `DashboardScreen` doesn't own the bottom-nav index itself.
+  /// wired by `HomeShell` to switch to the Transactions tab's review
+  /// filter, since this screen doesn't own the bottom-nav index.
   final VoidCallback? onReviewUncategorized;
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  State<InsightsScreen> createState() => _InsightsScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _InsightsScreenState extends State<InsightsScreen> {
   Period _period = Period.containing(PeriodGranularity.month, DateTime.now());
   bool _showCategoryAsPie = true;
 
   late Future<PeriodComparison> _comparison;
   late Future<List<CategorySpend>> _byCategory;
   late Future<List<PeriodSpend>> _monthly;
-  late Future<List<AccountSummary>> _accountSummaries;
   late Future<CategorizationRatio> _categorizationRatio;
+  late Future<List<MapEntry<String, double>>> _topMerchants;
 
   @override
   void initState() {
@@ -58,15 +51,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _comparison = widget.analytics.summaryWithComparison(_period);
     _byCategory = widget.analytics.spendByCategory(period: _period);
     _monthly = widget.analytics.monthlySpend();
-    // Balances are "now" data, not scoped to _period — wallets don't
-    // reset each week/month/quarter the way spend totals do.
-    _accountSummaries = widget.accountsService.allAccountSummaries();
     _categorizationRatio = widget.analytics.categorizationRatio(period: _period);
+    _topMerchants = widget.analytics.topCounterparties(limit: 5, period: _period);
   }
 
   Future<void> _refresh() async {
     setState(_reload);
-    await Future.wait([_comparison, _byCategory, _monthly, _accountSummaries, _categorizationRatio]);
+    await Future.wait([_comparison, _byCategory, _monthly, _categorizationRatio, _topMerchants]);
   }
 
   void _setGranularity(PeriodGranularity granularity) {
@@ -97,46 +88,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final canGoNext = !_period.containsCurrent(DateTime.now());
 
     return Scaffold(
-      appBar: AppBar(
-        title: const BrandMark(compact: true),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_outline),
-            tooltip: 'Profile',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ProfileScreen(
-                  profileService: widget.profileService,
-                  accountsService: widget.accountsService,
-                  providerSelectionService: widget.providerSelectionService,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Insights')),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
-            FutureBuilder<List<AccountSummary>>(
-              future: _accountSummaries,
-              builder: (context, snapshot) {
-                final data = snapshot.data ?? const [];
-                return OverviewCard(summaries: data, currency: currency);
-              },
-            ),
-            const SizedBox(height: 16),
-            Text('Wallet Breakdown', style: Theme.of(context).textTheme.titleMedium),
-            FutureBuilder<List<AccountSummary>>(
-              future: _accountSummaries,
-              builder: (context, snapshot) {
-                final data = snapshot.data ?? const [];
-                return WalletBreakdownList(summaries: data, currency: currency);
-              },
-            ),
-            const SizedBox(height: 28),
             _PeriodGranularitySelector(
               selected: _period.granularity,
               onChanged: _setGranularity,
@@ -202,6 +159,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   return const _EmptyHint(text: 'No spending recorded in this period.');
                 }
                 return _MonthlyTrendChart(data: data, isDark: isDark);
+              },
+            ),
+            const SizedBox(height: 28),
+            Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            FutureBuilder<List<MapEntry<String, double>>>(
+              future: _topMerchants,
+              builder: (context, snapshot) {
+                final data = snapshot.data ?? const [];
+                if (data.isEmpty) {
+                  return const _EmptyHint(text: 'No merchant spending in this period.');
+                }
+                final maxSpend = data.first.value;
+                return Column(
+                  children: [
+                    for (final entry in data)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 5,
+                              child: Text(
+                                entry.key,
+                                style: Theme.of(context).textTheme.bodyMedium,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Expanded(
+                              flex: 4,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: maxSpend == 0 ? 0 : entry.value / maxSpend,
+                                  minHeight: 8,
+                                  color: isDark
+                                      ? ChartPalette.sequentialDark
+                                      : ChartPalette.sequentialLight,
+                                  backgroundColor: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              currency.format(entry.value),
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    fontFeatures: const [FontFeature.tabularFigures()],
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
               },
             ),
           ],

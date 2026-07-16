@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Menya Cash brand system — matches the logo (purple "i" swoosh with an
+/// Menya Kash brand system — matches the logo (purple "i" swoosh with an
 /// orange accent dot and upward arrow, see assets/brand/menyacash.svg,
 /// menyacash.png, menyacash.ico).
 ///
@@ -31,8 +31,10 @@ class AppBrand {
   static const orangeButtonLight = Color(0xFF9C6208);
   static const orangeDark = Color(0xFFF5A623); // vs dark surface 8.59:1
 
-  static const surfaceLight = Color(0xFFFCFCFB);
+  static const surfaceLight = Color(0xFFFAFAFA);
   static const surfaceDark = Color(0xFF1A1A19);
+  static const cardLight = Color(0xFFFFFFFF);
+  static const cardDark = Color(0xFF232322);
 
   static const inkPrimaryLight = Color(0xFF111827);
   static const inkPrimaryDark = Color(0xFFFFFFFF);
@@ -40,8 +42,24 @@ class AppBrand {
   static const inkMutedDark = Color(0xFFC3C2B7);
 
   // Status — reserved meaning, never reused as a data-series color.
-  static const statusGood = Color(0xFF0CA30C);
-  static const statusCritical = Color(0xFFD03B3B);
+  static const statusGood = Color(0xFF15803D);
+  static const statusCritical = Color(0xFFDC2626);
+
+  // Semantic money colors (UI sprint): every amount in the app wears
+  // exactly one of these. The light steps are deepened from the spec
+  // hues (#16A34A / #DC2626 / #2563EB) where needed so small bold text
+  // clears WCAG AA 4.5:1 on white cards; the dark steps are lightened
+  // for the dark surface. Never reused as chart-series colors.
+  static const incomeLight = Color(0xFF15803D); // green-700, 5.0:1 on white
+  static const incomeDark = Color(0xFF4ADE80);
+  static const expenseLight = Color(0xFFDC2626); // spec red, 4.5:1 on white
+  static const expenseDark = Color(0xFFF87171);
+  static const transferLight = Color(0xFF2563EB); // spec blue, 5.2:1 on white
+  static const transferDark = Color(0xFF60A5FA);
+
+  static Color income(Brightness b) => b == Brightness.dark ? incomeDark : incomeLight;
+  static Color expense(Brightness b) => b == Brightness.dark ? expenseDark : expenseLight;
+  static Color transfer(Brightness b) => b == Brightness.dark ? transferDark : transferLight;
 }
 
 class AppTheme {
@@ -118,10 +136,12 @@ class AppTheme {
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        color: scheme.surfaceContainerLow,
+        // Pure white cards on the #FAFAFA canvas (UI sprint) — the card
+        // IS the elevation cue, so no border+shadow stacking.
+        color: scheme.brightness == Brightness.dark ? AppBrand.cardDark : AppBrand.cardLight,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.3)),
         ),
         margin: EdgeInsets.zero,
       ),
@@ -171,7 +191,7 @@ class BrandMark extends StatelessWidget {
         Image.asset('assets/brand/menyacash.png', height: logoHeight),
         SizedBox(width: compact ? 8 : 10),
         Text(
-          'Menya Cash',
+          'Menya Kash',
           style: TextStyle(
             fontSize: compact ? 16 : 20,
             fontWeight: FontWeight.w800,

@@ -1,29 +1,30 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 
-/// Onboarding step 3 (spec Phase 5, Screen 3): create the local user
-/// identity via email. There is deliberately no real OTP delivery here
-/// — this app declares no internet permission and has no
-/// network-capable dependency, so there is no path to actually send a
-/// code anywhere. The "confirmation code" is generated and shown on
-/// this device's own screen; re-entering it only confirms the user
-/// read the screen and typed their email correctly, not that they own
-/// the mailbox. A Skip option is always available and moves straight
-/// on to Security Setup — phone verification is deferred to a later
-/// pass, not part of this flow.
+import '../../profile/email_verification_service.dart';
+
+/// Onboarding Account Setup (spec Phase 5, reworked in the UI sprint's
+/// #5): create the local profile identity via email. Verification is
+/// delegated to [EmailVerificationService] — the current offline build
+/// completes after format validation (no delivery channel exists, so no
+/// fake code ceremony is shown), while the code-entry step below
+/// activates automatically once a real-delivery implementation is
+/// plugged in. A Skip option always moves straight on to Security
+/// Setup.
 class AccountSetupScreen extends StatefulWidget {
   const AccountSetupScreen({
     super.key,
     required this.onContinue,
     required this.onSkip,
+    this.verificationService = const LocalNoDeliveryEmailVerification(),
   });
 
-  /// Called with the confirmed email once the user completes the
-  /// code-entry step.
+  /// Called with the accepted email once verification (as defined by
+  /// [verificationService]) completes.
   final ValueChanged<String> onContinue;
 
   final VoidCallback onSkip;
+
+  final EmailVerificationService verificationService;
 
   @override
   State<AccountSetupScreen> createState() => _AccountSetupScreenState();
@@ -39,7 +40,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   final _emailFormKey = GlobalKey<FormState>();
 
   _Stage _stage = _Stage.emailEntry;
-  String? _generatedCode;
+  bool _busy = false;
   String? _codeError;
 
   @override
@@ -49,21 +50,42 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     super.dispose();
   }
 
-  void _sendCode() {
+  String get _email => _emailController.text.trim();
+
+  Future<void> _submitEmail() async {
     if (!(_emailFormKey.currentState?.validate() ?? false)) return;
-    setState(() {
-      _generatedCode = (100000 + Random().nextInt(900000)).toString();
-      _stage = _Stage.codeEntry;
-      _codeError = null;
-    });
+    setState(() => _busy = true);
+
+    final start = await widget.verificationService.startVerification(_email);
+    if (!mounted) return;
+
+    switch (start) {
+      case EmailVerificationStart.notRequired:
+        widget.onContinue(_email);
+      case EmailVerificationStart.codeSent:
+        setState(() {
+          _stage = _Stage.codeEntry;
+          _busy = false;
+          _codeError = null;
+        });
+    }
   }
 
-  void _confirmCode() {
-    if (_codeController.text.trim() == _generatedCode) {
-      widget.onContinue(_emailController.text.trim());
-      return;
+  Future<void> _confirmCode() async {
+    setState(() => _busy = true);
+    final ok = await widget.verificationService.confirmCode(
+      email: _email,
+      code: _codeController.text.trim(),
+    );
+    if (!mounted) return;
+    if (ok) {
+      widget.onContinue(_email);
+    } else {
+      setState(() {
+        _busy = false;
+        _codeError = 'That code doesn\'t match. Check your inbox and try again.';
+      });
     }
-    setState(() => _codeError = 'That code doesn\'t match — check the screen and try again.');
   }
 
   @override
@@ -82,13 +104,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
             _Stage.emailEntry => _EmailEntry(
                 formKey: _emailFormKey,
                 controller: _emailController,
-                onContinue: _sendCode,
+                busy: _busy,
+                onContinue: _submitEmail,
               ),
             _Stage.codeEntry => _CodeEntry(
-                email: _emailController.text.trim(),
-                code: _generatedCode!,
+                email: _email,
                 controller: _codeController,
                 error: _codeError,
+                busy: _busy,
                 onConfirm: _confirmCode,
                 onBack: () => setState(() => _stage = _Stage.emailEntry),
               ),
@@ -103,29 +126,43 @@ class _EmailEntry extends StatelessWidget {
   const _EmailEntry({
     required this.formKey,
     required this.controller,
+    required this.busy,
     required this.onContinue,
   });
 
   final GlobalKey<FormState> formKey;
   final TextEditingController controller;
+  final bool busy;
   final VoidCallback onContinue;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Form(
       key: formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            alignment: Alignment.center,
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: scheme.primary.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.alternate_email, size: 40, color: scheme.primary),
+            ),
+          ),
           Text(
             'Create your profile',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 8),
           Text(
-            'Add an email so this device remembers who this profile belongs '
-            'to. This stays on your phone — nothing is ever sent.',
+            'Add an email so this device knows who this profile belongs to.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 24),
@@ -135,6 +172,7 @@ class _EmailEntry extends StatelessWidget {
             decoration: const InputDecoration(
               labelText: 'Email',
               border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email_outlined),
             ),
             validator: (value) {
               if (value == null || value.trim().isEmpty) return 'Enter an email address';
@@ -143,27 +181,37 @@ class _EmailEntry extends StatelessWidget {
             },
           ),
           const SizedBox(height: 24),
-          FilledButton(onPressed: onContinue, child: const Text('Continue')),
+          FilledButton(
+            onPressed: busy ? null : onContinue,
+            child: busy
+                ? const SizedBox(
+                    height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Continue'),
+          ),
         ],
       ),
     );
   }
 }
 
+/// Code entry for real-delivery verification — inert in the current
+/// offline build (see [LocalNoDeliveryEmailVerification]) and activated
+/// automatically once an implementation returns
+/// [EmailVerificationStart.codeSent].
 class _CodeEntry extends StatelessWidget {
   const _CodeEntry({
     required this.email,
-    required this.code,
     required this.controller,
     required this.error,
+    required this.busy,
     required this.onConfirm,
     required this.onBack,
   });
 
   final String email;
-  final String code;
   final TextEditingController controller;
   final String? error;
+  final bool busy;
   final VoidCallback onConfirm;
   final VoidCallback onBack;
 
@@ -173,22 +221,11 @@ class _CodeEntry extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('Confirm your email', style: Theme.of(context).textTheme.headlineSmall),
+        Text('Check your inbox', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
         Text(
-          'This code was generated on your device for $email — it was not '
-          'sent anywhere. Type it below to confirm.',
+          'Enter the verification code sent to $email.',
           style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        const SizedBox(height: 20),
-        Center(
-          child: Text(
-            code,
-            style: Theme.of(context)
-                .textTheme
-                .displaySmall
-                ?.copyWith(fontWeight: FontWeight.w800, letterSpacing: 4),
-          ),
         ),
         const SizedBox(height: 20),
         TextField(
@@ -197,13 +234,13 @@ class _CodeEntry extends StatelessWidget {
           textAlign: TextAlign.center,
           maxLength: 6,
           decoration: InputDecoration(
-            labelText: 'Confirmation code',
+            labelText: 'Verification code',
             border: const OutlineInputBorder(),
             errorText: error,
           ),
         ),
         const SizedBox(height: 16),
-        FilledButton(onPressed: onConfirm, child: const Text('Confirm')),
+        FilledButton(onPressed: busy ? null : onConfirm, child: const Text('Confirm')),
         TextButton(onPressed: onBack, child: const Text('Back')),
       ],
     );

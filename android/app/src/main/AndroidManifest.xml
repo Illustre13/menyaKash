@@ -10,9 +10,15 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Only used to list SIM slots for the Pay screen's dual-SIM
+         chooser (spec #7) — never used to read the phone number, IMEI,
+         or any other identifier this app has no use for. If this
+         permission is denied, the SIM chooser degrades to "let Android
+         ask" instead of failing. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
-        android:label="Menya Cash"
+        android:label="Menya Kash"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -37,9 +37,28 @@ void main() {
     expect(result.txRef, 'FTCM2544N0JXJVEU');
   });
 
-  test('returns null for a TRANSFER to a non-MTN destination (known gap, not silently guessed)', () {
-    final result = parser.tryParse('TRANSFER - Bank of Kigali internal transfer, no MTN involved.');
-    expect(result, isNull);
+  test('parses a real TRANSFER to another BK account (cross-network, still a real BK debit)', () {
+    final result = parser.tryParse(_fixture('transfer_to_bk'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.bankTransfer);
+    expect(result.amount, 950000);
+    expect(result.txRef, 'FTCM27431AP9LXM4D');
+    expect(result.balanceAfter, 2660630);
+  });
+
+  test('parses a real TRANSFER to I&M BANK (cross-bank, still a real BK debit)', () {
+    final result = parser.tryParse(_fixture('transfer_to_im_bank'));
+    expect(result, isNotNull);
+    expect(result!.type, TransactionType.bankTransfer);
+    expect(result.amount, 250000);
+    expect(result.txRef, 'FTCM27317WR8ZJQ5N');
+  });
+
+  test('parses the English shape\'s "Available Balance" and 12-hour date', () {
+    final result = parser.tryParse(_fixture('transfer_to_momo_v2'));
+    expect(result, isNotNull);
+    expect(result!.balanceAfter, 312294);
+    expect(result.timestamp, DateTime(2026, 6, 5, 1, 47));
   });
 
   test('returns null for an unrecognized message shape', () {

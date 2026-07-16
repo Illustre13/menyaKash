@@ -1,0 +1,1 @@
+TRANSFER - Bank of Kigali Credited account: 100112345678 Debited account: 100245678901 Amount: RWF 950,000 Transaction Charge: RWF 0 Event #: FTCM27431AP9LXM4D Status: COMPLETED Date: 7/8/26, 2:45 PM Channel:MOBILE Available Balance: RWF 2,660,630 For enquiry call BK: 250788765432 / 4455

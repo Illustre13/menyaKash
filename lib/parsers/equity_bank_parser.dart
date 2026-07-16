@@ -13,9 +13,26 @@ import 'parsed_transaction.dart';
 /// Equity transaction observed is a bank-side movement, matching how
 /// this app already models BK Bank transfers.
 ///
-/// No confirmed real Equity message reports a running balance — unlike
-/// every MTN/Airtel shape. `ParsedTransaction.balanceAfter` is always
-/// null for this parser; that's expected, not a parsing gap.
+/// A third confirmed real shape — "Dear NAME, you have been
+/// debited/credited with RWF AMOUNT Charge C ref REF from BRANCH On:
+/// DD-Mon-YY HH:MM:SS balance BAL" — is a genuine bank-statement-style
+/// notification that DOES report a running balance (`balanceAfter`),
+/// unlike the `sent`/`received` shapes above. Its amount has no forced
+/// 2-decimal-place formatting and "RWF" appears *before* the number
+/// rather than after, so it needs its own amount/date extractors
+/// rather than reusing `_amountField`/the two date patterns below.
+///
+/// Deliberately NOT modeled here (confirmed real, correctly left
+/// unparsed): card-authorization notices ("Auth for card ...Amt: USD
+/// ..." — a foreign-currency pending hold, not a settled RWF
+/// transaction), zero-amount auto-charges ("Debit for card ...Amt:
+/// 0.00"), agent-withdrawal codes ("Use the code X to withdraw..." — no
+/// amount, nothing has moved yet), and "Confirmed. Request to send ...
+/// has been received for processing" (explicitly not yet completed —
+/// booking it now risks double-counting if/when a completion SMS
+/// follows). All of these fall through to the unparsed-message review
+/// queue, which is the correct outcome for a not-yet-settled or
+/// non-transactional notice.
 class EquityBankParser extends MomoParser {
   @override
   String get providerCode => 'equity_bank_rw';
@@ -25,8 +42,27 @@ class EquityBankParser extends MomoParser {
   static final _sentIntro =
       RegExp(r'RWF\s+(?:was|has\s+been)\s+successfully\s+sent\s+to', caseSensitive: false);
   static final _receivedIntro = RegExp(r'you\s+have\s+received', caseSensitive: false);
+  static final _debitedIntro =
+      RegExp(r'you\s+have\s+been\s+debited\s+with\s+RWF', caseSensitive: false);
+  static final _creditedIntro =
+      RegExp(r'you\s+have\s+been\s+credited\s+with\s+RWF', caseSensitive: false);
 
   static final _amountField = RegExp(_amountGroup, caseSensitive: false);
+
+  // Debit/credit shape: "debited with RWF 1000000 Charge 0 ref ..." —
+  // no decimals, no trailing "RWF".
+  static final _statementAmountField =
+      RegExp(r'(?:debited|credited)\s+with\s+RWF\s*([\d,]+(?:\.\d+)?)', caseSensitive: false);
+  static final _statementRefField = RegExp(r'\bref\s+(\w+)', caseSensitive: false);
+  static final _statementBranchField =
+      RegExp(r'from\s+([A-Z][A-Z\s]+?)\s+On:', caseSensitive: false);
+  static final _statementBalanceField =
+      RegExp(r'balance\s+([\d,]+(?:\.\d+)?)', caseSensitive: false);
+  // "On: 19-Jan-26 07:21:04"
+  static final _statementDate = RegExp(
+    r'On:\s*(\d{1,2})-(\w{3})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})',
+    caseSensitive: false,
+  );
 
   /// The cross-provider correlation key for transfer matching (Phase 3)
   /// — confirmed real: `MTN Ref. 541077019015` appears specifically on
@@ -66,6 +102,28 @@ class EquityBankParser extends MomoParser {
   @override
   ParsedTransaction? tryParse(String body, {DateTime? receivedAt}) {
     final normalized = body.replaceAll('\r\n', '\n').trim();
+
+    // The debit/credit bank-statement shape has its own amount/date
+    // format entirely (no forced 2-decimal "RWF"-suffixed amount, a
+    // "DD-Mon-YY HH:MM:SS" date) — checked first and returned early so
+    // it never falls through to the sent/received amount extraction
+    // below, which would not match it anyway.
+    if (_debitedIntro.hasMatch(normalized) || _creditedIntro.hasMatch(normalized)) {
+      final amount = _toDouble(_statementAmountField.firstMatch(normalized)?.group(1));
+      if (amount == null) return null;
+
+      return ParsedTransaction(
+        type: _debitedIntro.hasMatch(normalized)
+            ? TransactionType.bankTransfer
+            : TransactionType.received,
+        amount: amount,
+        counterparty: _statementBranchField.firstMatch(normalized)?.group(1)?.trim(),
+        txRef: _statementRefField.firstMatch(normalized)?.group(1),
+        balanceAfter: _toDouble(_statementBalanceField.firstMatch(normalized)?.group(1)),
+        timestamp: _extractStatementTimestamp(normalized) ?? receivedAt ?? DateTime.now(),
+      );
+    }
+
     final amount = _toDouble(_amountField.firstMatch(normalized)?.group(1));
     if (amount == null) return null;
 
@@ -94,6 +152,23 @@ class EquityBankParser extends MomoParser {
     }
 
     return null;
+  }
+
+  static DateTime? _extractStatementTimestamp(String body) {
+    final match = _statementDate.firstMatch(body);
+    if (match == null) return null;
+    final day = int.parse(match.group(1)!);
+    final month = _months[match.group(2)!.toLowerCase()];
+    if (month == null) return null;
+    final year = 2000 + int.parse(match.group(3)!);
+    final hour = int.parse(match.group(4)!);
+    final minute = int.parse(match.group(5)!);
+    final second = int.parse(match.group(6)!);
+    try {
+      return DateTime(year, month, day, hour, minute, second);
+    } on ArgumentError {
+      return null;
+    }
   }
 
   static DateTime? _extractTimestamp(String body) {

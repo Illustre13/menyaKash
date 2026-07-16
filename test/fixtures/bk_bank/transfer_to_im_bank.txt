@@ -1,0 +1,1 @@
+TRANSFER - I&M BANK Credited account: 20156789012 Debited account: 100245678901 Amount: RWF 250,000 Event #: FTCM27317WR8ZJQ5N Status: COMPLETED Date: 5/18/26, 8:15 AM Channel:MOBILE

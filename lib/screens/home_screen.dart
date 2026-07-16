@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -14,6 +16,7 @@ import '../data/database.dart';
 import '../profile/referral_service.dart';
 import '../profile/user_profile_service.dart';
 import '../providers/provider_selection_service.dart';
+import '../sms/sms_ingest_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/design_system.dart';
 import '../widgets/transaction_tile.dart';
@@ -41,6 +44,7 @@ class HomeScreen extends StatefulWidget {
     required this.profileService,
     required this.providerSelectionService,
     required this.referralService,
+    this.smsIngestService,
     required this.onOpenTransactions,
     required this.onOpenBudgets,
     required this.onOpenInsights,
@@ -55,6 +59,13 @@ class HomeScreen extends StatefulWidget {
   final UserProfileService profileService;
   final ProviderSelectionService providerSelectionService;
   final ReferralService referralService;
+
+  /// Null on the web dev-preview entry point (`main_web.dart`), which
+  /// has no real SMS inbox to incrementally scan. When present, Home
+  /// uses it to catch up on any provider SMS that arrived since the
+  /// last check (spec review batch item #3) — on open and on
+  /// pull-to-refresh — without re-reading the whole inbox.
+  final SmsIngestService? smsIngestService;
 
   final VoidCallback onOpenTransactions;
   final VoidCallback onOpenBudgets;
@@ -85,6 +96,22 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _reload();
+    // Catch up on any provider SMS that arrived since the app was last
+    // opened (spec review batch item #3) — fire-and-forget: the account
+    // balance/transaction Streams already wired below re-emit on their
+    // own once new rows land, so Home doesn't need to await this before
+    // rendering its first frame.
+    unawaited(_catchUpOnNewMessages());
+  }
+
+  Future<void> _catchUpOnNewMessages() async {
+    await widget.smsIngestService?.scanNewMessagesSince();
+    if (!mounted) return;
+    // The balance hero reads accountsService.allAccountSummaries() as a
+    // plain Future, not a watched Stream (see that field's doc) — so
+    // unlike the Stream-backed summary/category widgets, it needs an
+    // explicit reload to pick up a balance the catch-up scan just wrote.
+    setState(() => _accounts = widget.accountsService.allAccountSummaries());
   }
 
   void _reload() {
@@ -151,7 +178,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async => setState(_reload),
+        onRefresh: () async {
+          await widget.smsIngestService?.scanNewMessagesSince();
+          setState(_reload);
+        },
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
           children: [

@@ -3529,6 +3529,12 @@ class $UserProfileTable extends UserProfile
   late final GeneratedColumn<String> referralCode = GeneratedColumn<String>(
       'referral_code', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastIncrementalScanAtMeta =
+      const VerificationMeta('lastIncrementalScanAt');
+  @override
+  late final GeneratedColumn<DateTime> lastIncrementalScanAt =
+      GeneratedColumn<DateTime>('last_incremental_scan_at', aliasedName, true,
+          type: DriftSqlType.dateTime, requiredDuringInsert: false);
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -3548,6 +3554,7 @@ class $UserProfileTable extends UserProfile
         onboardingCompletedAt,
         themeMode,
         referralCode,
+        lastIncrementalScanAt,
         createdAt
       ];
   @override
@@ -3605,6 +3612,12 @@ class $UserProfileTable extends UserProfile
           referralCode.isAcceptableOrUnknown(
               data['referral_code']!, _referralCodeMeta));
     }
+    if (data.containsKey('last_incremental_scan_at')) {
+      context.handle(
+          _lastIncrementalScanAtMeta,
+          lastIncrementalScanAt.isAcceptableOrUnknown(
+              data['last_incremental_scan_at']!, _lastIncrementalScanAtMeta));
+    }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
           createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
@@ -3637,6 +3650,9 @@ class $UserProfileTable extends UserProfile
           .read(DriftSqlType.string, data['${effectivePrefix}theme_mode']),
       referralCode: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}referral_code']),
+      lastIncrementalScanAt: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime,
+          data['${effectivePrefix}last_incremental_scan_at']),
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
     );
@@ -3691,6 +3707,19 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
   /// stable to show/share; nothing in this app currently validates a
   /// code entered by someone else.
   final String? referralCode;
+
+  /// Watermark for the incremental SMS refresh (spec review batch item
+  /// #3): the received-time of the newest SMS the last incremental scan
+  /// already picked up, across every provider — not per-provider, since
+  /// the point is "catch up on whatever arrived since I last checked,"
+  /// not a separate cursor per sender. Null until the first incremental
+  /// scan runs (a fresh install/upgrade always does the full
+  /// [SmsIngestService.scanHistoricalInbox] first via onboarding, which
+  /// has no reason to also set this — see
+  /// [SmsIngestService.scanNewMessagesSince] doc for why the full
+  /// historical scan and the incremental one are deliberately separate
+  /// code paths rather than one parameterized method).
+  final DateTime? lastIncrementalScanAt;
   final DateTime createdAt;
   const UserProfileData(
       {required this.id,
@@ -3702,6 +3731,7 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       this.onboardingCompletedAt,
       this.themeMode,
       this.referralCode,
+      this.lastIncrementalScanAt,
       required this.createdAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3730,6 +3760,10 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
     if (!nullToAbsent || referralCode != null) {
       map['referral_code'] = Variable<String>(referralCode);
     }
+    if (!nullToAbsent || lastIncrementalScanAt != null) {
+      map['last_incremental_scan_at'] =
+          Variable<DateTime>(lastIncrementalScanAt);
+    }
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -3757,6 +3791,9 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       referralCode: referralCode == null && nullToAbsent
           ? const Value.absent()
           : Value(referralCode),
+      lastIncrementalScanAt: lastIncrementalScanAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastIncrementalScanAt),
       createdAt: Value(createdAt),
     );
   }
@@ -3775,6 +3812,8 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           serializer.fromJson<DateTime?>(json['onboardingCompletedAt']),
       themeMode: serializer.fromJson<String?>(json['themeMode']),
       referralCode: serializer.fromJson<String?>(json['referralCode']),
+      lastIncrementalScanAt:
+          serializer.fromJson<DateTime?>(json['lastIncrementalScanAt']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -3792,6 +3831,8 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           serializer.toJson<DateTime?>(onboardingCompletedAt),
       'themeMode': serializer.toJson<String?>(themeMode),
       'referralCode': serializer.toJson<String?>(referralCode),
+      'lastIncrementalScanAt':
+          serializer.toJson<DateTime?>(lastIncrementalScanAt),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -3806,6 +3847,7 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           Value<DateTime?> onboardingCompletedAt = const Value.absent(),
           Value<String?> themeMode = const Value.absent(),
           Value<String?> referralCode = const Value.absent(),
+          Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
           DateTime? createdAt}) =>
       UserProfileData(
         id: id ?? this.id,
@@ -3820,6 +3862,9 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
         themeMode: themeMode.present ? themeMode.value : this.themeMode,
         referralCode:
             referralCode.present ? referralCode.value : this.referralCode,
+        lastIncrementalScanAt: lastIncrementalScanAt.present
+            ? lastIncrementalScanAt.value
+            : this.lastIncrementalScanAt,
         createdAt: createdAt ?? this.createdAt,
       );
   UserProfileData copyWithCompanion(UserProfileCompanion data) {
@@ -3841,6 +3886,9 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       referralCode: data.referralCode.present
           ? data.referralCode.value
           : this.referralCode,
+      lastIncrementalScanAt: data.lastIncrementalScanAt.present
+          ? data.lastIncrementalScanAt.value
+          : this.lastIncrementalScanAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -3857,6 +3905,7 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           ..write('onboardingCompletedAt: $onboardingCompletedAt, ')
           ..write('themeMode: $themeMode, ')
           ..write('referralCode: $referralCode, ')
+          ..write('lastIncrementalScanAt: $lastIncrementalScanAt, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -3873,6 +3922,7 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       onboardingCompletedAt,
       themeMode,
       referralCode,
+      lastIncrementalScanAt,
       createdAt);
   @override
   bool operator ==(Object other) =>
@@ -3887,6 +3937,7 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           other.onboardingCompletedAt == this.onboardingCompletedAt &&
           other.themeMode == this.themeMode &&
           other.referralCode == this.referralCode &&
+          other.lastIncrementalScanAt == this.lastIncrementalScanAt &&
           other.createdAt == this.createdAt);
 }
 
@@ -3900,6 +3951,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
   final Value<DateTime?> onboardingCompletedAt;
   final Value<String?> themeMode;
   final Value<String?> referralCode;
+  final Value<DateTime?> lastIncrementalScanAt;
   final Value<DateTime> createdAt;
   const UserProfileCompanion({
     this.id = const Value.absent(),
@@ -3911,6 +3963,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     this.onboardingCompletedAt = const Value.absent(),
     this.themeMode = const Value.absent(),
     this.referralCode = const Value.absent(),
+    this.lastIncrementalScanAt = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   UserProfileCompanion.insert({
@@ -3923,6 +3976,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     this.onboardingCompletedAt = const Value.absent(),
     this.themeMode = const Value.absent(),
     this.referralCode = const Value.absent(),
+    this.lastIncrementalScanAt = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   static Insertable<UserProfileData> custom({
@@ -3935,6 +3989,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     Expression<DateTime>? onboardingCompletedAt,
     Expression<String>? themeMode,
     Expression<String>? referralCode,
+    Expression<DateTime>? lastIncrementalScanAt,
     Expression<DateTime>? createdAt,
   }) {
     return RawValuesInsertable({
@@ -3948,6 +4003,8 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
         'onboarding_completed_at': onboardingCompletedAt,
       if (themeMode != null) 'theme_mode': themeMode,
       if (referralCode != null) 'referral_code': referralCode,
+      if (lastIncrementalScanAt != null)
+        'last_incremental_scan_at': lastIncrementalScanAt,
       if (createdAt != null) 'created_at': createdAt,
     });
   }
@@ -3962,6 +4019,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
       Value<DateTime?>? onboardingCompletedAt,
       Value<String?>? themeMode,
       Value<String?>? referralCode,
+      Value<DateTime?>? lastIncrementalScanAt,
       Value<DateTime>? createdAt}) {
     return UserProfileCompanion(
       id: id ?? this.id,
@@ -3974,6 +4032,8 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
           onboardingCompletedAt ?? this.onboardingCompletedAt,
       themeMode: themeMode ?? this.themeMode,
       referralCode: referralCode ?? this.referralCode,
+      lastIncrementalScanAt:
+          lastIncrementalScanAt ?? this.lastIncrementalScanAt,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -4009,6 +4069,10 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     if (referralCode.present) {
       map['referral_code'] = Variable<String>(referralCode.value);
     }
+    if (lastIncrementalScanAt.present) {
+      map['last_incremental_scan_at'] =
+          Variable<DateTime>(lastIncrementalScanAt.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -4027,6 +4091,7 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
           ..write('onboardingCompletedAt: $onboardingCompletedAt, ')
           ..write('themeMode: $themeMode, ')
           ..write('referralCode: $referralCode, ')
+          ..write('lastIncrementalScanAt: $lastIncrementalScanAt, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -6569,6 +6634,7 @@ typedef $$UserProfileTableCreateCompanionBuilder = UserProfileCompanion
   Value<DateTime?> onboardingCompletedAt,
   Value<String?> themeMode,
   Value<String?> referralCode,
+  Value<DateTime?> lastIncrementalScanAt,
   Value<DateTime> createdAt,
 });
 typedef $$UserProfileTableUpdateCompanionBuilder = UserProfileCompanion
@@ -6582,6 +6648,7 @@ typedef $$UserProfileTableUpdateCompanionBuilder = UserProfileCompanion
   Value<DateTime?> onboardingCompletedAt,
   Value<String?> themeMode,
   Value<String?> referralCode,
+  Value<DateTime?> lastIncrementalScanAt,
   Value<DateTime> createdAt,
 });
 
@@ -6622,6 +6689,10 @@ class $$UserProfileTableFilterComposer
 
   ColumnFilters<String> get referralCode => $composableBuilder(
       column: $table.referralCode, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get lastIncrementalScanAt => $composableBuilder(
+      column: $table.lastIncrementalScanAt,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -6666,6 +6737,10 @@ class $$UserProfileTableOrderingComposer
       column: $table.referralCode,
       builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<DateTime> get lastIncrementalScanAt => $composableBuilder(
+      column: $table.lastIncrementalScanAt,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 }
@@ -6706,6 +6781,9 @@ class $$UserProfileTableAnnotationComposer
   GeneratedColumn<String> get referralCode => $composableBuilder(
       column: $table.referralCode, builder: (column) => column);
 
+  GeneratedColumn<DateTime> get lastIncrementalScanAt => $composableBuilder(
+      column: $table.lastIncrementalScanAt, builder: (column) => column);
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 }
@@ -6745,6 +6823,7 @@ class $$UserProfileTableTableManager extends RootTableManager<
             Value<DateTime?> onboardingCompletedAt = const Value.absent(),
             Value<String?> themeMode = const Value.absent(),
             Value<String?> referralCode = const Value.absent(),
+            Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
           }) =>
               UserProfileCompanion(
@@ -6757,6 +6836,7 @@ class $$UserProfileTableTableManager extends RootTableManager<
             onboardingCompletedAt: onboardingCompletedAt,
             themeMode: themeMode,
             referralCode: referralCode,
+            lastIncrementalScanAt: lastIncrementalScanAt,
             createdAt: createdAt,
           ),
           createCompanionCallback: ({
@@ -6769,6 +6849,7 @@ class $$UserProfileTableTableManager extends RootTableManager<
             Value<DateTime?> onboardingCompletedAt = const Value.absent(),
             Value<String?> themeMode = const Value.absent(),
             Value<String?> referralCode = const Value.absent(),
+            Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
           }) =>
               UserProfileCompanion.insert(
@@ -6781,6 +6862,7 @@ class $$UserProfileTableTableManager extends RootTableManager<
             onboardingCompletedAt: onboardingCompletedAt,
             themeMode: themeMode,
             referralCode: referralCode,
+            lastIncrementalScanAt: lastIncrementalScanAt,
             createdAt: createdAt,
           ),
           withReferenceMapper: (p0) => p0

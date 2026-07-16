@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart' show compute;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:telephony/telephony.dart' as telephony_pkg;
@@ -120,6 +121,7 @@ class SmsIngestService {
     // the old per-message path both did, just applied up front instead
     // of per message.
     final candidates = <RawSmsSnapshot>[];
+    DateTime? latestReceivedAt;
     for (final message in messages) {
       final sender = message.address;
       final body = message.body;
@@ -127,6 +129,9 @@ class SmsIngestService {
       final receivedAt = message.date != null
           ? DateTime.fromMillisecondsSinceEpoch(message.date!)
           : DateTime.now();
+      if (latestReceivedAt == null || receivedAt.isAfter(latestReceivedAt)) {
+        latestReceivedAt = receivedAt;
+      }
       candidates.add(RawSmsSnapshot(sender: sender, body: body, receivedAt: receivedAt));
     }
 
@@ -179,6 +184,116 @@ class SmsIngestService {
         matchedByProvider: Map.unmodifiable(matchedByProvider),
       );
     }
+
+    // Establishes the incremental-scan watermark (spec review batch
+    // item #3) right after the full historical scan, so the very next
+    // call to scanNewMessagesSince() has something to catch up from
+    // instead of no-oping on a null watermark. Uses the newest message
+    // actually seen in the inbox, not DateTime.now() — a scan that ran
+    // against a slightly stale copy of the inbox (e.g. mid-sync) must
+    // not silently skip messages between "newest seen" and "now".
+    if (latestReceivedAt != null) {
+      await _setLastIncrementalScanAt(latestReceivedAt);
+    }
+  }
+
+  /// Catches up on any provider SMS that arrived since the last
+  /// incremental scan (or since [sinceOverride] if given), without
+  /// re-reading the whole inbox — the fix for the confirmed real
+  /// "balance looked right once, then went stale" complaint (review
+  /// batch item #3). The live listener ([startLiveListener]) already
+  /// catches messages that arrive while the app is running; this
+  /// exists for everything that arrived while it wasn't — e.g. between
+  /// app launches, or immediately after enabling a new provider whose
+  /// history predates this install.
+  ///
+  /// Deliberately a separate method from [scanHistoricalInbox] rather
+  /// than that method taking an optional "since" parameter: the
+  /// historical scan's whole reason to exist is "read everything, once,
+  /// at onboarding" with its own progress-UI contract
+  /// ([ScanProgress]/chunked isolate parsing for a potentially huge
+  /// inbox); this method's workload is "usually zero new messages,
+  /// occasionally a handful" — no chunking, no isolate hop, no progress
+  /// stream needed, just a bounded query and a single batch write.
+  /// Merging them into one parameterized method would make the common
+  /// case (few messages) pay for machinery sized for the rare case
+  /// (thousands of messages).
+  ///
+  /// Returns how many new transactions were matched, so a caller (e.g.
+  /// Home's pull-to-refresh) can show something happened.
+  Future<int> scanNewMessagesSince({DateTime? sinceOverride}) async {
+    final profile = await _db.select(_db.userProfile).getSingleOrNull();
+    final since = sinceOverride ?? profile?.lastIncrementalScanAt;
+
+    // No watermark yet (a fresh install that hasn't finished onboarding,
+    // or an upgrade from before this feature existed) — nothing to
+    // "catch up" on; the next full historical scan or the live listener
+    // will establish history from here. Scanning the entire inbox here
+    // would just duplicate what onboarding's historical scan already
+    // does, with none of its chunking/progress UI.
+    if (since == null) return 0;
+
+    final providerSnapshot = await snapshotSelectedProviders(_db);
+    if (providerSnapshot.isEmpty) return 0;
+    final knownSenders = providerSnapshot.expand((p) => p.senderPatterns).toSet();
+
+    final messages = await _telephony.getInboxSms(
+      columns: [
+        telephony_pkg.SmsColumn.ADDRESS,
+        telephony_pkg.SmsColumn.BODY,
+        telephony_pkg.SmsColumn.DATE,
+      ],
+      filter: telephony_pkg.SmsFilter.where(telephony_pkg.SmsColumn.DATE)
+          .greaterThan(since.millisecondsSinceEpoch.toString()),
+    );
+
+    final knownHashes = (await _db.select(_db.smsMessages).get()).map((m) => m.smsHash).toSet();
+
+    final candidates = <RawSmsSnapshot>[];
+    var latestSeen = since;
+    for (final message in messages) {
+      final sender = message.address;
+      final body = message.body;
+      if (sender == null || body == null || !knownSenders.contains(sender)) continue;
+      final receivedAt = message.date != null
+          ? DateTime.fromMillisecondsSinceEpoch(message.date!)
+          : DateTime.now();
+      if (receivedAt.isAfter(latestSeen)) latestSeen = receivedAt;
+      candidates.add(RawSmsSnapshot(sender: sender, body: body, receivedAt: receivedAt));
+    }
+
+    var matched = 0;
+    if (candidates.isNotEmpty) {
+      final parsed = await compute(
+        parseChunk,
+        ParseChunkInput(messages: candidates, providers: providerSnapshot),
+      );
+
+      final toWrite = <ParsedSmsResult>[];
+      for (final result in parsed) {
+        if (knownHashes.contains(result.smsHash)) continue;
+        knownHashes.add(result.smsHash);
+        toWrite.add(result);
+      }
+
+      final outcome = await _processor.processBatch(toWrite);
+      matched = outcome.matched;
+    }
+
+    await _setLastIncrementalScanAt(latestSeen);
+    return matched;
+  }
+
+  Future<void> _setLastIncrementalScanAt(DateTime timestamp) async {
+    final existing = await _db.select(_db.userProfile).getSingleOrNull();
+    if (existing == null) {
+      await _db.into(_db.userProfile).insert(
+            UserProfileCompanion.insert(lastIncrementalScanAt: Value(timestamp)),
+          );
+      return;
+    }
+    await (_db.update(_db.userProfile)..where((tbl) => tbl.id.equals(existing.id)))
+        .write(UserProfileCompanion(lastIncrementalScanAt: Value(timestamp)));
   }
 
   /// Registers a listener for new incoming SMS. Must be called after

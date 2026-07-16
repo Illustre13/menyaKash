@@ -413,6 +413,19 @@ class UserProfile extends Table {
   /// code entered by someone else.
   TextColumn get referralCode => text().nullable()();
 
+  /// Watermark for the incremental SMS refresh (spec review batch item
+  /// #3): the received-time of the newest SMS the last incremental scan
+  /// already picked up, across every provider — not per-provider, since
+  /// the point is "catch up on whatever arrived since I last checked,"
+  /// not a separate cursor per sender. Null until the first incremental
+  /// scan runs (a fresh install/upgrade always does the full
+  /// [SmsIngestService.scanHistoricalInbox] first via onboarding, which
+  /// has no reason to also set this — see
+  /// [SmsIngestService.scanNewMessagesSince] doc for why the full
+  /// historical scan and the incremental one are deliberately separate
+  /// code paths rather than one parameterized method).
+  DateTimeColumn get lastIncrementalScanAt => dateTime().nullable()();
+
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
@@ -531,7 +544,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -638,6 +651,12 @@ class AppDatabase extends _$AppDatabase {
               "DELETE FROM provider_senders WHERE sender_pattern = 'AIRTELMONEY'",
             );
             await _seedProviders();
+          }
+          if (from < 12 && from >= 4) {
+            // Incremental-scan watermark (spec review batch item #3).
+            // Guarded to from >= 4, same reasoning as themeMode/
+            // referralCode above.
+            await m.addColumn(userProfile, userProfile.lastIncrementalScanAt);
           }
         },
       );

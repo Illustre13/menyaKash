@@ -161,6 +161,7 @@ class _HomeShellState extends State<HomeShell> {
         profileService: _profileService,
         providerSelectionService: _providerSelectionService,
         referralService: _referralService,
+        smsIngestService: _ingestService,
         onOpenTransactions: () => setState(() => _index = 1),
         onOpenBudgets: () => setState(() => _index = 2),
         onOpenInsights: () => setState(() => _index = 3),

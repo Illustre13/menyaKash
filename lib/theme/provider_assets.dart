@@ -8,6 +8,8 @@ const _providerLogoAssets = <String, String>{
   'ekash_rw': 'assets/brand/ekash.png',
   'bk_bank_rw': 'assets/brand/bk.jpg',
   'equity_bank_rw': 'assets/brand/equity.png',
+  // No dedicated MoKash logo asset yet — falls back to the monogram
+  // tile below, same as any provider not listed here.
 };
 
 /// Loose match to each provider's real brand color — used for the
@@ -19,6 +21,7 @@ const providerAccents = <String, Color>{
   'ekash_rw': Color(0xFF00A651),
   'bk_bank_rw': Color(0xFF004A8F),
   'equity_bank_rw': Color(0xFF7A1F1F),
+  'mokash_rw': Color(0xFFFFCC00),
 };
 
 /// A provider's logo in a rounded tile, falling back to a colored

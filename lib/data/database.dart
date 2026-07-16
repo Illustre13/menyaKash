@@ -531,7 +531,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -623,6 +623,22 @@ class AppDatabase extends _$AppDatabase {
             // duplicate-column error.
             await m.addColumn(userProfile, userProfile.referralCode);
           }
+          if (from < 11) {
+            // MoKash provider + Airtel sender correction (real review
+            // batch). `_seedProviders` re-running is safe (it upserts by
+            // `code`/`{senderPattern, providerId}`, never duplicating),
+            // but it can only ADD rows, not remove the now-wrong
+            // 'AIRTELMONEY' sender alias — confirmed real: that sender
+            // never carries actual Airtel Money transaction traffic,
+            // only 'AirtelMoney' does, so leaving it mapped risks a
+            // non-financial message being treated as one. Deleted
+            // explicitly here for existing installs; a fresh install
+            // never seeds it in the first place (see _seedProviders).
+            await customStatement(
+              "DELETE FROM provider_senders WHERE sender_pattern = 'AIRTELMONEY'",
+            );
+            await _seedProviders();
+          }
         },
       );
 
@@ -633,25 +649,60 @@ class AppDatabase extends _$AppDatabase {
   /// since both products share that shortcode in practice; the
   /// ProviderDetector (lib/providers/) resolves the ambiguity by
   /// matching message-body shape, not sender alone.
+  ///
+  /// `AIRTELMONEY` (all-caps) is deliberately NOT listed as an Airtel
+  /// Money sender — confirmed real: that literal sender string never
+  /// carries actual transaction SMS, only the mixed-case `AirtelMoney`
+  /// does. Listing both would have let a non-financial message resolve
+  /// to this provider. See schemaVersion 11's migration for how this is
+  /// corrected on upgrade for installs that seeded it under v10.
   Future<void> _seedProviders() async {
     final seed = <(String code, String displayName, String category, List<String> senders)>[
       ('mtn_momo_rw', 'MTN Mobile Money', 'mobile_money', ['M-Money', 'MTN', 'MoMo', 'MTNRWANDA']),
       ('ekash_rw', 'eKash', 'mobile_money', ['M-Money', 'Ekash', 'eKash']),
-      ('airtel_money_rw', 'Airtel Money', 'mobile_money', ['AirtelMoney', 'AIRTELMONEY']),
+      ('airtel_money_rw', 'Airtel Money', 'mobile_money', ['AirtelMoney']),
       ('bk_bank_rw', 'Bank of Kigali', 'bank', ['BKeBANK', 'BK BANK', 'BK ARENA']),
       ('equity_bank_rw', 'Equity Bank', 'bank', ['EQUITYBANK']),
+      // MoKash (spec review batch): MTN's savings/micro-loan sub-wallet,
+      // sent from `Y'ello` — a sender not otherwise used by any
+      // registered provider, so no disambiguator is needed the way
+      // M-Money's MTN/eKash split requires one.
+      ('mokash_rw', 'MoKash', 'mobile_money', ["Y'ello"]),
     ];
 
     for (final (code, displayName, category, senders) in seed) {
-      final providerId = await into(financialProviders).insertOnConflictUpdate(
-        FinancialProvidersCompanion.insert(
-          code: code,
-          displayName: displayName,
-          category: category,
-        ),
-      );
+      // Explicit exists-check rather than `insertOnConflictUpdate`: that
+      // method's upsert target is the table's primary key by default in
+      // this drift version, not a declared unique column
+      // (`FinancialProviders.code` here) — the same class of bug already
+      // found and fixed in `_seedDefaultCategories`/
+      // `ProviderSelectionService`. Confirmed real: this exact call
+      // running twice against the same on-disk database (once via
+      // onCreate/an early migration step, again via a later `from < N`
+      // block in the same upgrade chain) previously threw a UNIQUE
+      // constraint violation on `code`, because a fresh `insert` with no
+      // explicit id never matches an existing row by the primary key
+      // alone once sqlite's autoincrement counter has moved on.
+      final provider = await (select(financialProviders)..where((tbl) => tbl.code.equals(code)))
+          .getSingleOrNull();
+      final int providerId;
+      if (provider == null) {
+        providerId = await into(financialProviders).insert(
+          FinancialProvidersCompanion.insert(code: code, displayName: displayName, category: category),
+        );
+      } else {
+        providerId = provider.id;
+        await (update(financialProviders)..where((tbl) => tbl.id.equals(providerId))).write(
+          FinancialProvidersCompanion(displayName: Value(displayName), category: Value(category)),
+        );
+      }
+
       for (final sender in senders) {
-        await into(providerSenders).insertOnConflictUpdate(
+        final existingSender = await (select(providerSenders)
+              ..where((tbl) => tbl.senderPattern.equals(sender) & tbl.providerId.equals(providerId)))
+            .getSingleOrNull();
+        if (existingSender != null) continue;
+        await into(providerSenders).insert(
           ProviderSendersCompanion.insert(senderPattern: sender, providerId: providerId),
         );
       }

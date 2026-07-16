@@ -2,6 +2,7 @@ import 'airtel_money_parser.dart';
 import 'bk_bank_parser.dart';
 import 'ekash_parser.dart';
 import 'equity_bank_parser.dart';
+import 'mokash_parser.dart';
 import 'momo_parser.dart';
 import 'mtn_rwanda_parser.dart';
 import 'parsed_transaction.dart';
@@ -35,6 +36,7 @@ class MomoParserRegistry {
               AirtelMoneyParser(),
               EquityBankParser(),
               BkBankParser(),
+              MokashParser(),
             ];
 
   final List<MomoParser> parsers;

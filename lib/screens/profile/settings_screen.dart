@@ -6,6 +6,7 @@ import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
 import '../../theme/provider_assets.dart';
 import '../../theme/theme_controller.dart';
+import '../../widgets/coming_soon_popup.dart';
 
 /// Settings (spec Phase 7, extended in the UI sprint): Appearance,
 /// Security, Financial Providers, and Data sections, reached from the
@@ -155,28 +156,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   leading: const Icon(Icons.description_outlined),
                   title: const Text('Export Statement'),
                   subtitle: const Text('Save your transaction history to this device'),
-                  onTap: () => _notImplementedYet(context, 'Export Statement'),
+                  onTap: () => showComingSoonPopup(
+                    context,
+                    feature: 'Export Statement',
+                    icon: Icons.description_outlined,
+                    description: 'Download your transaction history as PDF, Excel, or CSV.',
+                  ),
                 ),
                 ListTile(
                   leading: const Icon(Icons.sms_outlined),
                   title: const Text('Backup SMS'),
                   subtitle: const Text('Save your raw SMS evidence to this device'),
-                  onTap: () => _notImplementedYet(context, 'Backup SMS'),
+                  onTap: () => showComingSoonPopup(
+                    context,
+                    feature: 'Backup SMS',
+                    icon: Icons.sms_outlined,
+                    description:
+                        'Save a copy of your raw SMS evidence to this device, independent of your transaction history.',
+                  ),
                 ),
                 ListTile(
                   leading: const Icon(Icons.save_outlined),
                   title: const Text('Local Backup'),
                   subtitle: const Text('Export or restore a backup file — never sent over a network'),
-                  onTap: () => _notImplementedYet(context, 'Local Backup'),
+                  onTap: () => showComingSoonPopup(
+                    context,
+                    feature: 'Local Backup',
+                    icon: Icons.save_outlined,
+                    description:
+                        'Export or restore a full backup file, still entirely on this device.',
+                  ),
                 ),
               ],
             ),
-    );
-  }
-
-  void _notImplementedYet(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$feature is coming soon.')),
     );
   }
 }

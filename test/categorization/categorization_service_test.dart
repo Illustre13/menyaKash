@@ -109,4 +109,22 @@ void main() {
               'sweeping fix, not the old exact-match-only path');
     });
   });
+
+  group('createCategory (spec review batch item #8: Manage Categories\' new Add flow)', () {
+    test('creates a new category and returns its id', () async {
+      final id = await service.createCategory('My New Category');
+      final categories = await service.allCategories();
+      expect(categories.map((c) => c.name), contains('My New Category'));
+      expect(categories.firstWhere((c) => c.name == 'My New Category').id, id);
+    });
+
+    test('throws on a duplicate name — the Add-category UI relies on this to show '
+        'a friendly "already exists" message instead of silently duplicating', () async {
+      await service.createCategory('My Duplicate Category');
+      expect(
+        () => service.createCategory('My Duplicate Category'),
+        throwsA(anything),
+      );
+    });
+  });
 }

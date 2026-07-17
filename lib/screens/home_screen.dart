@@ -403,16 +403,31 @@ class _PeriodStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<PeriodGranularity>(
-      style: const ButtonStyle(visualDensity: VisualDensity.compact),
-      segments: const [
-        ButtonSegment(value: PeriodGranularity.week, label: Text('Week')),
-        ButtonSegment(value: PeriodGranularity.month, label: Text('Month')),
-        ButtonSegment(value: PeriodGranularity.quarter, label: Text('Quarter')),
-        ButtonSegment(value: PeriodGranularity.year, label: Text('Year')),
-      ],
-      selected: {selected},
-      onSelectionChanged: (s) => onChanged(s.first),
+    // Confirmed real overflow: 4 fixed-text segments ("Quarter" being
+    // the longest) can exceed the card's width on narrower phones or a
+    // larger system text scale — SizedBox.expand + FittedBox lets the
+    // whole control shrink to fit instead of clipping/overflowing,
+    // rather than trying to guess a font size that always fits.
+    return SizedBox(
+      width: double.infinity,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: SegmentedButton<PeriodGranularity>(
+          style: const ButtonStyle(
+            visualDensity: VisualDensity.compact,
+            padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 8)),
+          ),
+          segments: const [
+            ButtonSegment(value: PeriodGranularity.week, label: Text('Week')),
+            ButtonSegment(value: PeriodGranularity.month, label: Text('Month')),
+            ButtonSegment(value: PeriodGranularity.quarter, label: Text('Quarter')),
+            ButtonSegment(value: PeriodGranularity.year, label: Text('Year')),
+          ],
+          selected: {selected},
+          onSelectionChanged: (s) => onChanged(s.first),
+        ),
+      ),
     );
   }
 }

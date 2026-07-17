@@ -241,15 +241,23 @@ class _PeriodGranularitySelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<PeriodGranularity>(
-      segments: const [
-        ButtonSegment(value: PeriodGranularity.week, label: Text('Week')),
-        ButtonSegment(value: PeriodGranularity.month, label: Text('Month')),
-        ButtonSegment(value: PeriodGranularity.quarter, label: Text('Quarter')),
-        ButtonSegment(value: PeriodGranularity.year, label: Text('Year')),
-      ],
-      selected: {selected},
-      onSelectionChanged: (s) => onChanged(s.first),
+    // Same overflow fix as Home's _PeriodStrip — shrink-to-fit rather
+    // than overflow on narrower phones or a larger system text scale.
+    return SizedBox(
+      width: double.infinity,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: SegmentedButton<PeriodGranularity>(
+          segments: const [
+            ButtonSegment(value: PeriodGranularity.week, label: Text('Week')),
+            ButtonSegment(value: PeriodGranularity.month, label: Text('Month')),
+            ButtonSegment(value: PeriodGranularity.quarter, label: Text('Quarter')),
+            ButtonSegment(value: PeriodGranularity.year, label: Text('Year')),
+          ],
+          selected: {selected},
+          onSelectionChanged: (s) => onChanged(s.first),
+        ),
+      ),
     );
   }
 }

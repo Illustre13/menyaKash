@@ -78,7 +78,14 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/brand/menyacash_icon.png"
-  adaptive_icon_background: "#FFFFFF"
+  # Fully transparent, not a solid color (spec review batch item #9):
+  # a plain "#FFFFFF" background renders as an opaque white plate
+  # behind the logo mark on the adaptive-icon mask. Android has no
+  # literal "no background" adaptive-icon option, but a transparent PNG
+  # background composites correctly on modern Android (the launcher's
+  # own surface shows through), which is the real equivalent of "remove
+  # the white background."
+  adaptive_icon_background: "assets/brand/menyacash_background_transparent.png"
   adaptive_icon_foreground: "assets/brand/menyacash_foreground.png"
 
 flutter:

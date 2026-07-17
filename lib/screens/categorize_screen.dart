@@ -509,53 +509,106 @@ class _ManageCategoriesTabState extends State<_ManageCategoriesTab> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Category>>(
-      future: _categories,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SkeletonList(rows: 5);
-        }
-        final categories = snapshot.data ?? const [];
-        if (categories.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'No categories yet — create one from the Categorize screen '
-                'when labeling a transaction.',
-                textAlign: TextAlign.center,
-              ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _addCategory,
+              icon: const Icon(Icons.add),
+              label: const Text('Add category'),
             ),
-          );
-        }
-        return ListView.separated(
-          itemCount: categories.length,
-          separatorBuilder: (_, __) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final category = categories[index];
-            return ListTile(
-              leading: CategoryAvatar(categoryName: category.name, size: 36),
-              title: Text(category.name),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: 'Rename',
-                    onPressed: () => _rename(category),
+          ),
+        ),
+        Expanded(
+          child: FutureBuilder<List<Category>>(
+            future: _categories,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const SkeletonList(rows: 5);
+              }
+              final categories = snapshot.data ?? const [];
+              if (categories.isEmpty) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'No categories yet — add one above, or create one from '
+                      'the Categorize screen when labeling a transaction.',
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    tooltip: 'Delete',
-                    onPressed: () => _delete(category),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+                );
+              }
+              return ListView.separated(
+                itemCount: categories.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final category = categories[index];
+                  return ListTile(
+                    leading: CategoryAvatar(categoryName: category.name, size: 36),
+                    title: Text(category.name),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit_outlined),
+                          tooltip: 'Rename',
+                          onPressed: () => _rename(category),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          tooltip: 'Delete',
+                          onPressed: () => _delete(category),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
+  }
+
+  Future<void> _addCategory() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add category'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'e.g. Groceries'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+
+    try {
+      await widget.service.createCategory(name);
+      _reload();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('A category named "$name" already exists.')),
+      );
+    }
   }
 
   Future<void> _rename(Category category) async {

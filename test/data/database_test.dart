@@ -28,6 +28,45 @@ void main() {
     expect(found, isNull);
   });
 
+  test('a differently-worded counterparty for the same real merchant still '
+      'matches, via the fuzzy fallback (closes the confirmed real gap: '
+      'exact-match-only meant "SUPERMARKET LTD - TILL 2" never inherited a '
+      'category taught on "SUPERMARKET LTD (Code: 55123)")', () async {
+    final categoryId = await db
+        .into(db.categories)
+        .insert(CategoriesCompanion.insert(name: 'My Custom Groceries'));
+    await db.assignCodeToCategory('SUPERMARKET LTD (Code: 55123)', categoryId);
+
+    final found = await db.findCategoryByCode('SUPERMARKET LTD - TILL 2');
+    expect(found, isNotNull);
+    expect(found!.name, 'My Custom Groceries');
+  });
+
+  test('exact match wins over fuzzy match when both are present', () async {
+    final groceries = await db
+        .into(db.categories)
+        .insert(CategoriesCompanion.insert(name: 'My Custom Groceries'));
+    final other =
+        await db.into(db.categories).insert(CategoriesCompanion.insert(name: 'My Custom Other'));
+    await db.assignCodeToCategory('SUPERMARKET LTD', other);
+    await db.assignCodeToCategory('SUPERMARKET LTD (Code: 55123)', groceries);
+
+    final found = await db.findCategoryByCode('SUPERMARKET LTD');
+    expect(found!.name, 'My Custom Other',
+        reason: 'the byte-identical mapping must win, not a fuzzy one');
+  });
+
+  test('a bare phone number never fuzzy-matches anything by coincidence',
+      () async {
+    final categoryId = await db
+        .into(db.categories)
+        .insert(CategoriesCompanion.insert(name: 'My Custom Transfers'));
+    await db.assignCodeToCategory('0788123456', categoryId);
+
+    final found = await db.findCategoryByCode('0722222222');
+    expect(found, isNull);
+  });
+
   test('financial providers are seeded on database creation', () async {
     final providers = await db.select(db.financialProviders).get();
     final codes = providers.map((p) => p.code).toSet();

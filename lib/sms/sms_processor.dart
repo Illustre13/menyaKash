@@ -4,6 +4,7 @@ import '../accounts/accounts_service.dart';
 import '../data/database.dart';
 import '../merchants/merchant_normalization_service.dart';
 import '../parsers/momo_parser_registry.dart';
+import '../payments/planned_payment_service.dart';
 import '../providers/provider_detection.dart';
 import 'isolate_parsing.dart';
 
@@ -35,14 +36,17 @@ class SmsProcessor {
     this._detector, {
     AccountsService? accountsService,
     MerchantNormalizationService? merchantService,
+    PlannedPaymentService? plannedPaymentService,
   })  : _accounts = accountsService ?? AccountsService(_db),
-        _merchants = merchantService ?? MerchantNormalizationService(_db);
+        _merchants = merchantService ?? MerchantNormalizationService(_db),
+        _plannedPayments = plannedPaymentService ?? PlannedPaymentService(_db);
 
   final AppDatabase _db;
   final MomoParserRegistry _registry;
   final ProviderDetector _detector;
   final AccountsService _accounts;
   final MerchantNormalizationService _merchants;
+  final PlannedPaymentService _plannedPayments;
 
   /// Cached "Fees & Charges" category id (spec #3) — resolved once,
   /// not once per fee row, since every fee-charge transaction this
@@ -297,6 +301,27 @@ class SmsProcessor {
             categoryId: Value(categoryId),
           ),
         );
+
+    // Reconcile against a pending planned payment (category-before-
+    // dialing spec) — only for the live single-message path, not the
+    // historical/batch scan: a planned payment only ever concerns a
+    // payment just made in this session, never years-old history being
+    // backfilled. If a match is found and it disagrees with whatever
+    // CategoryCodes already resolved above, the planned payment's
+    // explicit choice wins — the user chose it deliberately, seconds
+    // before this exact transaction existed.
+    final plannedCategoryId = await _plannedPayments.findMatchAndApply(
+      transactionId: parentId,
+      amount: parsed.amount,
+      providerCode: detection.provider.code,
+      transactionTimestamp: parsed.timestamp,
+      transactionCounterparty: parsed.counterparty,
+    );
+    if (plannedCategoryId != null && plannedCategoryId != categoryId) {
+      await (_db.update(_db.transactions)..where((tbl) => tbl.id.equals(parentId))).write(
+        TransactionsCompanion(categoryId: Value(plannedCategoryId)),
+      );
+    }
 
     if (parsed.fee > 0) {
       await _insertFeeTransaction(

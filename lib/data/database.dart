@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
 import '../categorization/category_taxonomy.dart' show defaultCategorySeed;
+import '../categorization/counterparty_matching.dart' show significantToken;
 
 part 'database.g.dart';
 
@@ -426,6 +427,14 @@ class UserProfile extends Table {
   /// code paths rather than one parameterized method).
   DateTimeColumn get lastIncrementalScanAt => dateTime().nullable()();
 
+  /// Whether Home's balance figures (the Total Balance headline and
+  /// every per-account balance in the wallet breakdown — review batch
+  /// spec #6 says "hide everything") are masked behind a privacy
+  /// blur, toggled by an eye icon next to Total Balance. Persisted so
+  /// the choice survives an app restart, same as [themeMode]; defaults
+  /// to visible (false) so this is purely additive for existing users.
+  BoolColumn get balanceHidden => boolean().withDefault(const Constant(false))();
+
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
@@ -502,6 +511,94 @@ class Budgets extends Table {
       ];
 }
 
+/// A remembered meter/account number for a USSD-based utility service
+/// (review batch item #3: "save this meter?" for Electricity/Water) —
+/// purely a convenience so the user doesn't have to retype it on the
+/// real on-screen USSD prompt every time. [service] is a stable
+/// machine key ("electricity", "water"), not a display string, mirror
+/// of how [FinancialProviders.code] works. Never itself dialed or
+/// embedded into a USSD string — no confirmed digit sequence exists
+/// for pre-filling a meter number inline (see UssdBuilder's class doc)
+/// — this is shown to the user to copy/read off, nothing more.
+class SavedMeterNumbers extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  TextColumn get service => text().withLength(min: 1, max: 32)();
+  TextColumn get meterNumber => text().withLength(min: 1, max: 32)();
+
+  DateTimeColumn get savedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {service}
+      ];
+}
+
+/// Whether a [PlannedPayments] row has been reconciled with a real
+/// incoming [Transactions] row yet. `pending` -> exactly one of
+/// `matched` / `expired`, never back to `pending` — mirrors
+/// [SmsProcessingStatus]'s one-way lifecycle for the same reason: once
+/// resolved, a planned payment's outcome is a fact, not a live state.
+enum PlannedPaymentStatus { pending, matched, expired }
+
+/// A user's declared INTENT to pay, captured the moment they choose a
+/// category and tap "Done" on the Pay screen — never itself spending
+/// evidence, and deliberately NOT a [Transactions] row (see that
+/// table's own doc: every transaction in this app is created from a
+/// real [SmsMessages] row, with zero exceptions on the real Android
+/// build). A USSD call can be dialed and still fail silently from this
+/// app's point of view — wrong PIN, dropped network, insufficient
+/// balance — and this app has no way to read the USSD session's result
+/// (no Accessibility Service, same boundary as every other USSD
+/// feature), so it cannot know at dial-time whether money actually
+/// moved.
+///
+/// Instead, [SmsProcessor] reconciles each newly-arrived real
+/// transaction against the pending rows here (same provider, same
+/// amount, within a short time window — see that class for the exact
+/// rule) and, on a match, applies [categoryId] to the real transaction
+/// and flips this row to `matched`. A row that ages past the window
+/// with no match flips to `expired` — visible in the Planned Payments
+/// log so a failed payment is noticed, not because it seeded a phantom
+/// transaction, but because the user's own recorded intent recorded
+/// itself as unresolved.
+class PlannedPayments extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// Raw recipient string as entered on the Pay screen — a phone
+  /// number or a merchant till code, whichever the user picked. Not
+  /// necessarily how the real transaction's `counterparty` will read
+  /// (SMS often reports a name instead — see [SmsProcessor]'s matching
+  /// doc), so this is only ever used as a tiebreaker substring check,
+  /// never the primary match key.
+  TextColumn get recipient => text()();
+
+  RealColumn get amount => real()();
+
+  IntColumn get categoryId =>
+      integer().references(Categories, #id, onDelete: KeyAction.cascade)();
+
+  /// Which provider's USSD menu this was dialed through (e.g.
+  /// 'mtn_momo_rw') — the real transaction must come from the same
+  /// provider to match; an identical amount arriving from a different
+  /// provider around the same time is a coincidence, not this payment.
+  TextColumn get providerCode => text()();
+
+  TextColumn get status => textEnum<PlannedPaymentStatus>()();
+
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  /// Set once [status] leaves `pending` (either way) — when this row
+  /// stops being a candidate for matching.
+  DateTimeColumn get resolvedAt => dateTime().nullable()();
+
+  /// The real transaction this ended up matching, once matched — lets
+  /// the Planned Payments log show what it resolved to, and is the
+  /// idempotency guard against double-applying the same match.
+  IntColumn get matchedTransactionId =>
+      integer().nullable().references(Transactions, #id, onDelete: KeyAction.setNull)();
+}
+
 /// Messages from a known-provider sender that no registered parser could
 /// match. Surfaced in the "Review" screen so the parser can be extended
 /// instead of silently dropping data. Retained as-is post-migration for
@@ -538,13 +635,15 @@ class UnparsedMessages extends Table {
   UserFinancialSources,
   Budgets,
   FavoriteContacts,
+  SavedMeterNumbers,
+  PlannedPayments,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -657,6 +756,22 @@ class AppDatabase extends _$AppDatabase {
             // Guarded to from >= 4, same reasoning as themeMode/
             // referralCode above.
             await m.addColumn(userProfile, userProfile.lastIncrementalScanAt);
+          }
+          if (from < 13 && from >= 4) {
+            // Balance-hide toggle (review batch item #6). Same
+            // from >= 4 guard as every other userProfile column added
+            // after its creation.
+            await m.addColumn(userProfile, userProfile.balanceHidden);
+          }
+          if (from < 14) {
+            // Saved meter numbers (review batch item #3) — a
+            // brand-new table, safe to create unconditionally.
+            await m.createTable(savedMeterNumbers);
+          }
+          if (from < 15) {
+            // Planned payments (category-before-dialing review batch)
+            // — a brand-new table, safe to create unconditionally.
+            await m.createTable(plannedPayments);
           }
         },
       );
@@ -892,13 +1007,34 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
+  /// Exact match first (the common, fast case — a `CategoryCodes`
+  /// unique-index lookup). On a miss, falls back to the same loose
+  /// "same real-world merchant" rule [CategorizationService] already
+  /// uses for its bulk apply-to-similar action ([significantToken]) —
+  /// the confirmed real gap this closes: a merchant's counterparty
+  /// string isn't always byte-identical across messages (a different
+  /// trailing till code, a reformatted parenthetical), so a category
+  /// taught once should still apply when the *next* real message for
+  /// the same merchant arrives worded slightly differently, not only
+  /// when it happens to match verbatim.
   Future<Category?> findCategoryByCode(String code) async {
-    final mapping = await (select(categoryCodes)
-          ..where((tbl) => tbl.code.equals(code)))
+    final exact = await (select(categoryCodes)..where((tbl) => tbl.code.equals(code)))
         .getSingleOrNull();
-    if (mapping == null) return null;
-    return (select(categories)..where((tbl) => tbl.id.equals(mapping.categoryId)))
-        .getSingle();
+    if (exact != null) {
+      return (select(categories)..where((tbl) => tbl.id.equals(exact.categoryId))).getSingle();
+    }
+
+    final key = significantToken(code);
+    if (key == null) return null;
+
+    final allCodes = await select(categoryCodes).get();
+    for (final mapping in allCodes) {
+      if (significantToken(mapping.code) == key) {
+        return (select(categories)..where((tbl) => tbl.id.equals(mapping.categoryId)))
+            .getSingle();
+      }
+    }
+    return null;
   }
 
   Future<int> assignCodeToCategory(String code, int categoryId) {

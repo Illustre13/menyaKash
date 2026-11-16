@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../sms/sms_ingest_service.dart';
 
@@ -25,7 +26,7 @@ class SmsSetupScreen extends StatefulWidget {
   State<SmsSetupScreen> createState() => _SmsSetupScreenState();
 }
 
-enum _Stage { explain, requesting, scanning, denied }
+enum _Stage { explain, requesting, scanning, denied, permanentlyDenied }
 
 class _SmsSetupScreenState extends State<SmsSetupScreen> {
   _Stage _stage = _Stage.explain;
@@ -34,9 +35,19 @@ class _SmsSetupScreenState extends State<SmsSetupScreen> {
   Future<void> _startScan() async {
     setState(() => _stage = _Stage.requesting);
 
-    final granted = await widget.ingestService.requestPermissions();
-    if (!granted) {
-      setState(() => _stage = _Stage.denied);
+    final status = await widget.ingestService.requestPermissions();
+    if (!status.isGranted) {
+      // Confirmed real bug (user report: "no SMS feeding process
+      // shown," reinstalling didn't help): a permanently-denied status
+      // means Android won't show the request dialog again at all — no
+      // amount of "Try again" in this app will ever produce one, since
+      // that decision lives in Android's own permission memory, keyed
+      // by package+signature, which survives uninstall/reinstall. The
+      // only real recovery path is Android's own app-settings screen.
+      setState(() {
+        _stage =
+            status.isPermanentlyDenied ? _Stage.permanentlyDenied : _Stage.denied;
+      });
       return;
     }
 
@@ -66,6 +77,7 @@ class _SmsSetupScreenState extends State<SmsSetupScreen> {
                 ),
               _Stage.scanning => _ScanningStep(progress: _progress),
               _Stage.denied => _DeniedStep(onRetry: _startScan),
+              _Stage.permanentlyDenied => _PermanentlyDeniedStep(onRetry: _startScan),
             },
           ),
         ),
@@ -239,6 +251,52 @@ class _DeniedStep extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         FilledButton(onPressed: onRetry, child: const Text('Try again')),
+      ],
+    );
+  }
+}
+
+/// Shown when Android's own permission memory has already permanently
+/// denied SMS access for this app (confirmed real bug: "no SMS feeding
+/// process shown," reinstalling didn't fix it) — that decision is
+/// keyed by package name + signing certificate, lives outside this
+/// app's own data, and survives uninstalling and reinstalling the app.
+/// [Permission.sms.request] will never show a dialog again once this
+/// state is reached; the only real recovery path is Android's own app
+/// settings screen, opened directly via [openAppSettings].
+class _PermanentlyDeniedStep extends StatelessWidget {
+  const _PermanentlyDeniedStep({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.settings_outlined, size: 56),
+        const SizedBox(height: 16),
+        Text(
+          'SMS permission needs to be turned on in Settings',
+          style: Theme.of(context).textTheme.titleMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Android remembers this being denied before — even across an '
+          'uninstall — so it won\'t ask again in-app. Open Menya Kash\'s '
+          'settings, allow SMS, then come back and continue.',
+          style: Theme.of(context).textTheme.bodyMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: () => openAppSettings(),
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('Open app settings'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(onPressed: onRetry, child: const Text('I\'ve allowed it — check again')),
       ],
     );
   }

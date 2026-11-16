@@ -83,6 +83,20 @@ class UserProfileService {
         .write(UserProfileCompanion(themeMode: Value(mode)));
   }
 
+  /// Persists Home's balance-hide preference (review batch item #6).
+  /// Creates the profile row if needed, same as [setAppLockEnabled].
+  Future<void> setBalanceHidden(bool hidden) async {
+    final existing = await currentProfile();
+    if (existing == null) {
+      await _db.into(_db.userProfile).insert(
+            UserProfileCompanion.insert(balanceHidden: Value(hidden)),
+          );
+      return;
+    }
+    await (_db.update(_db.userProfile)..where((tbl) => tbl.id.equals(existing.id)))
+        .write(UserProfileCompanion(balanceHidden: Value(hidden)));
+  }
+
   /// Marks onboarding as complete — called once, at the end of the
   /// Phase 6 provider-selection step. [HomeShell] checks this (not SMS
   /// permission state) to decide whether to show onboarding.

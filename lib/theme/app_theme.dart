@@ -107,10 +107,15 @@ class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: scheme.surface,
         indicatorColor: scheme.primary.withValues(alpha: 0.16),
+        // fontSize 11, not 12 (confirmed real regression): 5 bottom-nav
+        // destinations (Home/Pay/Transactions/Budgets/Insights) give
+        // each label ~20% less width than the previous 4-tab layout,
+        // and "Transactions" — the longest label — was already right
+        // at the edge at 12sp, so it started clipping/truncating.
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
             color: selected ? scheme.primary : scheme.onSurfaceVariant,
           );

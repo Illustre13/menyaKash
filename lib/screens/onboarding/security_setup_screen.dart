@@ -122,6 +122,31 @@ class _SecuritySetupScreenState extends State<SecuritySetupScreen> {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
+              // Confirmed real UX gap (user report: a lock screen
+              // appearing "during onboarding" was actually this
+              // screen's own local_auth confirmation, but the OS's own
+              // biometric/PIN chrome carries no Menya Kash branding —
+              // easy to misread as being locked out. This line is
+              // upfront that tapping the button below hands off to
+              // your phone's own screen, once, right now — not a
+              // recurring lock happening unexpectedly.
+              Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Tapping "Enable App Lock" opens your phone\'s own unlock screen '
+                      'once, just to confirm it works — that\'s expected, not an error.',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -132,7 +157,21 @@ class _SecuritySetupScreenState extends State<SecuritySetupScreen> {
               ],
               const Spacer(),
               if (_checking)
-                const Center(child: CircularProgressIndicator())
+                Center(
+                  child: Column(
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Waiting for your phone\'s lock screen…',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                )
               else ...[
                 FilledButton.icon(
                   onPressed: _enableAppLock,

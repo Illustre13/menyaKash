@@ -60,9 +60,19 @@ class SmsIngestService {
   final SmsProcessor _processor;
   final telephony_pkg.Telephony _telephony = telephony_pkg.Telephony.instance;
 
-  Future<bool> requestPermissions() async {
-    final smsGranted = await Permission.sms.request();
-    return smsGranted.isGranted;
+  /// Returns the real [PermissionStatus], not a collapsed bool — a
+  /// confirmed real gap (user report: "no SMS feeding process shown,"
+  /// re-installing didn't help): once a user denies this permission
+  /// with "Don't ask again" (or twice on stock Android), the OS
+  /// remembers that choice at the package+signature level, which
+  /// **survives uninstalling and reinstalling the app** (it's not part
+  /// of this app's own data). [Permission.sms.request] then resolves
+  /// instantly to [PermissionStatus.permanentlyDenied] with no dialog
+  /// shown at all — indistinguishable from a bare `false` unless the
+  /// caller can see the real status and route to Android's own app
+  /// settings screen instead of futilely re-requesting.
+  Future<PermissionStatus> requestPermissions() {
+    return Permission.sms.request();
   }
 
   Future<bool> hasPermissions() async {

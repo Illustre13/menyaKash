@@ -1,18 +1,31 @@
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:i_momo/data/database.dart';
 import 'package:i_momo/parsers/momo_parser_registry.dart';
+import 'package:i_momo/payments/planned_payment_service.dart';
 import 'package:i_momo/providers/provider_detector_factory.dart';
 import 'package:i_momo/sms/isolate_parsing.dart';
 import 'package:i_momo/sms/sms_processor.dart';
 
+String _fixture(String name) =>
+    File('test/fixtures/mtn_rwanda/$name.txt').readAsStringSync().trim();
+
 void main() {
   late AppDatabase db;
   late SmsProcessor processor;
+  late PlannedPaymentService plannedPayments;
 
   setUp(() {
     db = AppDatabase.forTesting(NativeDatabase.memory());
-    processor = SmsProcessor(db, MomoParserRegistry(), buildProviderDetector(db));
+    plannedPayments = PlannedPaymentService(db);
+    processor = SmsProcessor(
+      db,
+      MomoParserRegistry(),
+      buildProviderDetector(db),
+      plannedPaymentService: plannedPayments,
+    );
   });
 
   tearDown(() => db.close());
@@ -361,6 +374,66 @@ void main() {
 
       final txs = await db.select(db.transactions).get();
       expect(txs.every((t) => t.accountId == accounts.single.id), isTrue);
+    });
+  });
+
+  group('planned-payment reconciliation (category-before-dialing spec)', () {
+    test('a matching planned payment\'s category is applied to the real transaction, '
+        'via the recipient-in-counterparty tiebreaker', () async {
+      final categoryId = await db
+          .into(db.categories)
+          .insert(CategoriesCompanion.insert(name: 'My Custom Transfers'));
+      await plannedPayments.create(
+        recipient: '0782707994',
+        amount: 1000,
+        categoryId: categoryId,
+        providerCode: 'mtn_momo_rw',
+      );
+
+      final id = await insertPendingSms(sender: 'M-Money', body: _fixture('sent_new_format'));
+      final matched = await processor.processOneById(id);
+      expect(matched, isTrue);
+
+      final tx = (await db.select(db.transactions).get())
+          .firstWhere((t) => t.type != TransactionType.fee);
+      expect(tx.categoryId, categoryId);
+
+      final plannedRows = await db.select(db.plannedPayments).get();
+      expect(plannedRows.single.status, PlannedPaymentStatus.matched);
+      expect(plannedRows.single.matchedTransactionId, tx.id);
+    });
+
+    test('a planned payment for a different provider is never applied', () async {
+      final categoryId = await db
+          .into(db.categories)
+          .insert(CategoriesCompanion.insert(name: 'My Custom Transfers'));
+      await plannedPayments.create(
+        recipient: '0782707994',
+        amount: 1000,
+        categoryId: categoryId,
+        providerCode: 'airtel_money_rw',
+      );
+
+      final id = await insertPendingSms(sender: 'M-Money', body: _fixture('sent_new_format'));
+      await processor.processOneById(id);
+
+      final tx = (await db.select(db.transactions).get())
+          .firstWhere((t) => t.type != TransactionType.fee);
+      expect(tx.categoryId, isNull);
+    });
+
+    test('CategoryCodes still wins when no planned payment matches', () async {
+      final categoryId = await db
+          .into(db.categories)
+          .insert(CategoriesCompanion.insert(name: 'My Custom Transfers'));
+      await db.assignCodeToCategory('Jeremie NAYIGIZIKI (250782707994)', categoryId);
+
+      final id = await insertPendingSms(sender: 'M-Money', body: _fixture('sent_new_format'));
+      await processor.processOneById(id);
+
+      final tx = (await db.select(db.transactions).get())
+          .firstWhere((t) => t.type != TransactionType.fee);
+      expect(tx.categoryId, categoryId);
     });
   });
 }

@@ -1,5 +1,21 @@
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+/// Outcome of [UssdDialer.runDirect] — lets a caller show the right
+/// message without duplicating the permission/fallback logic itself.
+enum UssdRunOutcome {
+  /// The USSD call was placed directly (ACTION_CALL) — the network's
+  /// own response is now showing or about to show.
+  dialedDirectly,
+
+  /// Direct dialing was refused/unavailable; the dialer was pre-filled
+  /// instead and the user must press call themselves.
+  fellBackToPrefill,
+
+  /// Neither direct dial nor pre-fill could be started on this device.
+  failed,
+}
 
 /// One callable SIM slot on this device (spec #7's SIM chooser) — a
 /// plain mirror of the native `PhoneAccountHandle` list, never the
@@ -15,7 +31,7 @@ class SimOption {
   final String label;
 }
 
-/// Hands USSD codes to the platform. Two levels:
+/// Hands USSD codes to the platform. Three levels:
 ///
 /// [dial] — opens the native dialer with the code pre-filled; the user
 /// presses call themselves. The `#` is percent-encoded explicitly
@@ -34,6 +50,11 @@ class SimOption {
 /// Service, same boundary as always. Optional [simSlotIndex] (spec #7)
 /// picks which SIM the call goes out on for dual-SIM devices — see
 /// [listSims].
+///
+/// [runDirect] — the standardized combination of the two above
+/// (request permission, try [payNow], fall back to [dial]'s pre-fill).
+/// Every USSD-triggering UI in the app should call this rather than
+/// re-implement the permission/fallback sequence itself.
 class UssdDialer {
   UssdDialer._();
 
@@ -69,6 +90,26 @@ class UssdDialer {
       // Web dev preview / tests: the channel doesn't exist there.
       return false;
     }
+  }
+
+  /// Standardized entry point for every USSD action in the app (review
+  /// batch item #2: "bypass Open Dialer... go directly to those USSD
+  /// next steps") — requests CALL_PHONE once, tries [payNow], and only
+  /// falls back to [dial]'s pre-fill if permission is refused or direct
+  /// dialing isn't available on this device. This is the same sequence
+  /// PayScreen's own "Pay now" button already used; every new
+  /// USSD-triggering tile (Home's Electricity/Water, Pay's Advanced
+  /// grid) calls this instead of duplicating the permission-then-
+  /// fallback logic at each call site.
+  static Future<UssdRunOutcome> runDirect(String ussdCode, {int? simSlotIndex}) async {
+    final phonePermission = await Permission.phone.request();
+    if (phonePermission.isGranted) {
+      final ok = await payNow(ussdCode, simSlotIndex: simSlotIndex);
+      if (ok) return UssdRunOutcome.dialedDirectly;
+    }
+
+    final launched = await dial(ussdCode);
+    return launched ? UssdRunOutcome.fellBackToPrefill : UssdRunOutcome.failed;
   }
 
   /// Every callable SIM slot on this device — empty on a single-SIM

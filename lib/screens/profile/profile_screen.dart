@@ -7,6 +7,7 @@ import '../../premium/premium_popup.dart';
 import '../../profile/referral_service.dart';
 import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
+import '../../sms/sms_ingest_service.dart';
 import '../../theme/provider_assets.dart';
 import 'referral_screen.dart';
 import 'settings_screen.dart';
@@ -23,11 +24,19 @@ class ProfileScreen extends StatefulWidget {
     required this.accountsService,
     required this.providerSelectionService,
     required this.referralService,
+    this.smsIngestService,
   });
 
   final UserProfileService profileService;
   final AccountsService accountsService;
   final ProviderSelectionService providerSelectionService;
+
+  /// Null on the web dev-preview entry point. Threaded through to
+  /// Settings so enabling a provider there can immediately backfill
+  /// its existing SMS history (review batch item #1) instead of
+  /// leaving the account at "Balance unknown" until the next message
+  /// happens to arrive.
+  final SmsIngestService? smsIngestService;
   final ReferralService referralService;
 
   @override
@@ -60,6 +69,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         builder: (_) => SettingsScreen(
           profileService: widget.profileService,
           providerSelectionService: widget.providerSelectionService,
+          smsIngestService: widget.smsIngestService,
         ),
       ),
     ).then((_) => _load());

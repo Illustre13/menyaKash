@@ -10,12 +10,16 @@ import 'data/database.dart';
 import 'data/dev_seed_data.dart';
 import 'profile/referral_service.dart';
 import 'profile/user_profile_service.dart';
+import 'payments/planned_payment_service.dart';
 import 'providers/provider_selection_service.dart';
 import 'screens/budgets_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/insights_screen.dart';
+import 'screens/pay_screen.dart';
 import 'screens/transactions_screen.dart';
 import 'theme/app_theme.dart';
+import 'ussd/sim_selection_controller.dart';
+import 'utilities/saved_meter_service.dart';
 
 /// Dev/testing entry point for `flutter run -d chrome`. Not the real app
 /// entry point (`main.dart`) — this app's actual purpose (reading MoMo
@@ -64,6 +68,9 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
   final _contactsService = ContactsService();
   late final _favoriteContactsService = FavoriteContactsService(_db);
   late final _referralService = ReferralService(_db);
+  final _simSelectionController = SimSelectionController();
+  late final _savedMeterService = SavedMeterService(_db);
+  late final _plannedPaymentService = PlannedPaymentService(_db);
 
   bool _seeded = false;
   int _index = 0;
@@ -97,20 +104,28 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         accountsService: _accountsService,
         budgetService: _budgetService,
         categorizationService: _categorizationService,
-        contactsService: _contactsService,
-        favoriteContactsService: _favoriteContactsService,
         profileService: _profileService,
         providerSelectionService: _providerSelectionService,
         referralService: _referralService,
-        onOpenTransactions: () => setState(() => _index = 1),
-        onOpenBudgets: () => setState(() => _index = 2),
-        onOpenInsights: () => setState(() => _index = 3),
+        simSelectionController: _simSelectionController,
+        savedMeterService: _savedMeterService,
+        onOpenPay: () => setState(() => _index = 1),
+        onOpenTransactions: () => setState(() => _index = 2),
+        onOpenBudgets: () => setState(() => _index = 3),
+        onOpenInsights: () => setState(() => _index = 4),
+      ),
+      PayScreen(
+        contactsService: _contactsService,
+        categorizationService: _categorizationService,
+        favoriteContactsService: _favoriteContactsService,
+        simSelectionController: _simSelectionController,
+        plannedPaymentService: _plannedPaymentService,
       ),
       TransactionsScreen(db: _db, categorizationService: _categorizationService),
       BudgetsScreen(budgetService: _budgetService),
       InsightsScreen(
         analytics: _analyticsService,
-        onReviewUncategorized: () => setState(() => _index = 1),
+        onReviewUncategorized: () => setState(() => _index = 2),
       ),
     ];
 
@@ -133,6 +148,7 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.bolt_outlined), label: 'Pay'),
           NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Transactions'),
           NavigationDestination(icon: Icon(Icons.track_changes), label: 'Budgets'),
           NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),

@@ -4,9 +4,11 @@ import 'package:local_auth/local_auth.dart';
 import '../../data/database.dart';
 import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
+import '../../sms/sms_ingest_service.dart';
 import '../../theme/provider_assets.dart';
 import '../../theme/theme_controller.dart';
 import '../../widgets/coming_soon_popup.dart';
+import 'provider_backfill_popup.dart';
 
 /// Settings (spec Phase 7, extended in the UI sprint): Appearance,
 /// Security, Financial Providers, and Data sections, reached from the
@@ -16,10 +18,15 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.profileService,
     required this.providerSelectionService,
+    this.smsIngestService,
   });
 
   final UserProfileService profileService;
   final ProviderSelectionService providerSelectionService;
+
+  /// Null on the web dev-preview entry point — see [ProfileScreen]'s
+  /// same field for why enabling a provider needs this.
+  final SmsIngestService? smsIngestService;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -79,13 +86,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _load();
   }
 
-  Future<void> _toggleProvider(int providerId, bool selected) async {
+  Future<void> _toggleProvider(int providerId, bool selected, String displayName) async {
     if (selected) {
       await widget.providerSelectionService.selectProviders([providerId]);
+      await _load();
+      // Confirmed real gap (review batch item #1): selectProviders only
+      // creates the Accounts row — without this, a provider enabled
+      // after onboarding sits at "Balance unknown" until a fresh SMS
+      // happens to arrive, even though its whole history is already
+      // sitting in the phone's inbox. Only runs on enable, and only
+      // when this isn't the web dev-preview build (no real SMS inbox
+      // there).
+      final ingestService = widget.smsIngestService;
+      if (ingestService != null && mounted) {
+        await showProviderBackfillPopup(
+          context,
+          providerDisplayName: displayName,
+          smsIngestService: ingestService,
+        );
+      }
     } else {
       await widget.providerSelectionService.deselectProvider(providerId);
+      await _load();
     }
-    await _load();
   }
 
   @override
@@ -148,7 +171,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       title: Text(option.provider.displayName),
                       value: option.isSelected,
-                      onChanged: (value) => _toggleProvider(option.provider.id, value),
+                      onChanged: (value) =>
+                          _toggleProvider(option.provider.id, value, option.provider.displayName),
                     )),
                 const Divider(),
                 const _SectionHeader('Data'),

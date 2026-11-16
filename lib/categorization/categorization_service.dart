@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../data/database.dart';
+import 'counterparty_matching.dart';
 
 /// A transaction paired with other uncategorized transactions that look
 /// like the same counterparty (case-insensitive substring match on
@@ -158,7 +159,7 @@ class CategorizationService {
     String anchorName, {
     int? excludeTransactionId,
   }) async {
-    final anchorKey = _significantToken(anchorName);
+    final anchorKey = significantToken(anchorName);
     if (anchorKey == null) return null;
 
     final query = _db.select(_db.transactions)
@@ -169,7 +170,7 @@ class CategorizationService {
     final candidates = await query.get();
 
     final similar = candidates.where((tx) {
-      final key = _significantToken(tx.counterparty!.trim());
+      final key = significantToken(tx.counterparty!.trim());
       return key != null && key == anchorKey;
     }).toList();
 
@@ -214,17 +215,6 @@ class CategorizationService {
     }
   }
 
-  /// Extracts the leading alphabetic "name" portion of a counterparty
-  /// string for loose matching, e.g. "SUPERMARKET LTD (Code: 55123)" ->
-  /// "supermarket ltd". Returns null when there's nothing meaningful to
-  /// key on (e.g. a bare phone number), so numeric-only counterparties
-  /// never get lumped together by coincidence.
-  String? _significantToken(String raw) {
-    final withoutParens = raw.replaceAll(RegExp(r'\(.*?\)'), '').trim();
-    final lettersOnly = RegExp(r'[A-Za-z][A-Za-z\s]{2,}').firstMatch(withoutParens);
-    if (lettersOnly == null) return null;
-    return lettersOnly.group(0)!.trim().toLowerCase();
-  }
 
   /// Every counterparty paid so far, ranked by how often — the
   /// "phonebook" behind the Frequent Codes screen and the Pay screen's

@@ -372,19 +372,30 @@ class QuickAction extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: scheme.primary.withValues(alpha: 0.10),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icon, color: scheme.primary),
+                child: Icon(icon, color: scheme.primary, size: 22),
               ),
               const SizedBox(height: 6),
-              Text(label, style: Theme.of(context).textTheme.labelMedium),
+              // maxLines/overflow (not present before): a row can now
+              // hold several of these tiles at once (Pay, Electricity,
+              // Water, Urubuto, RRA), so a longer label must ellipsize
+              // rather than overflow the tile's narrow width.
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelSmall,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
           ),
         ),

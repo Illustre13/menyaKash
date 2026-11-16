@@ -13,10 +13,12 @@ import 'profile/referral_service.dart';
 import 'profile/user_profile_service.dart';
 import 'providers/provider_detector_factory.dart';
 import 'providers/provider_selection_service.dart';
+import 'screens/app_lock_gate.dart';
 import 'screens/budgets_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/insights_screen.dart';
 import 'screens/onboarding/onboarding_flow_screen.dart';
+import 'screens/pay_screen.dart';
 import 'screens/transactions_screen.dart';
 import 'sms/sms_ingest_service.dart';
 import 'sms/sms_processor.dart';
@@ -24,6 +26,9 @@ import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 import 'transfers/transfer_matching_engine.dart';
 import 'accounts/accounts_service.dart';
+import 'payments/planned_payment_service.dart';
+import 'ussd/sim_selection_controller.dart';
+import 'utilities/saved_meter_service.dart';
 
 void main() {
   runApp(const IMomoApp());
@@ -61,7 +66,13 @@ class _HomeShellState extends State<HomeShell> {
   final _db = AppDatabase();
   late final _registry = MomoParserRegistry();
   late final _detector = buildProviderDetector(_db);
-  late final _processor = SmsProcessor(_db, _registry, _detector);
+  late final _plannedPaymentService = PlannedPaymentService(_db);
+  late final _processor = SmsProcessor(
+    _db,
+    _registry,
+    _detector,
+    plannedPaymentService: _plannedPaymentService,
+  );
   late final _ingestService = SmsIngestService(_db, _detector, _processor);
   late final _transferEngine = TransferMatchingEngine(_db);
   late final _categorizationService = CategorizationService(_db);
@@ -74,6 +85,8 @@ class _HomeShellState extends State<HomeShell> {
   final _contactsService = ContactsService();
   late final _favoriteContactsService = FavoriteContactsService(_db);
   late final _referralService = ReferralService(_db);
+  final _simSelectionController = SimSelectionController();
+  late final _savedMeterService = SavedMeterService(_db);
 
   int _index = 0;
 
@@ -88,6 +101,11 @@ class _HomeShellState extends State<HomeShell> {
   // launch, only the SMS step itself (still retryable from the
   // dashboard's Settings if needed later).
   bool? _alreadyOnboarded;
+
+  // Whether App Lock is enabled, read alongside onboarding status.
+  // Re-read whenever Settings' App Lock toggle could plausibly have
+  // changed (a returning Navigator pop) — see _refreshAppLockSetting.
+  bool _appLockEnabled = false;
 
   @override
   void initState() {
@@ -110,7 +128,22 @@ class _HomeShellState extends State<HomeShell> {
       }
       unawaited(_transferEngine.findAndLinkTransfers());
     }
-    setState(() => _alreadyOnboarded = onboarded);
+    final profile = await _profileService.currentProfile();
+    setState(() {
+      _alreadyOnboarded = onboarded;
+      _appLockEnabled = profile?.appLockEnabled ?? false;
+    });
+  }
+
+  /// Settings' App Lock switch lives several screens deep (Home →
+  /// Profile → Settings) with no shared state/callback threading that
+  /// far back up — re-reading on every Home rebuild is the simplest
+  /// correct fix, and cheap (one already-open-database row read).
+  Future<void> _refreshAppLockSetting() async {
+    final profile = await _profileService.currentProfile();
+    if (!mounted) return;
+    final enabled = profile?.appLockEnabled ?? false;
+    if (enabled != _appLockEnabled) setState(() => _appLockEnabled = enabled);
   }
 
   void _onOnboardingComplete() {
@@ -146,9 +179,10 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
-    // Four calm tabs (UI redesign): Home / Transactions / Budgets /
-    // Insights. Pay is a Home quick action (pushed route); the
-    // code-bank and unparsed-review tooling live behind the
+    // Five tabs (review batch item #7/#8, reversing the earlier
+    // Pay-as-quick-action-only decision on the user's explicit
+    // instruction): Home / Pay / Transactions / Budgets / Insights.
+    // The code-bank and unparsed-review tooling live behind the
     // Transactions app bar; Profile hangs off Home's app bar.
     final screens = [
       HomeScreen(
@@ -156,35 +190,48 @@ class _HomeShellState extends State<HomeShell> {
         accountsService: _accountsService,
         budgetService: _budgetService,
         categorizationService: _categorizationService,
-        contactsService: _contactsService,
-        favoriteContactsService: _favoriteContactsService,
         profileService: _profileService,
         providerSelectionService: _providerSelectionService,
         referralService: _referralService,
         smsIngestService: _ingestService,
-        onOpenTransactions: () => setState(() => _index = 1),
-        onOpenBudgets: () => setState(() => _index = 2),
-        onOpenInsights: () => setState(() => _index = 3),
+        simSelectionController: _simSelectionController,
+        savedMeterService: _savedMeterService,
+        onOpenPay: () => setState(() => _index = 1),
+        onOpenTransactions: () => setState(() => _index = 2),
+        onOpenBudgets: () => setState(() => _index = 3),
+        onOpenInsights: () => setState(() => _index = 4),
+        onReturnFromProfile: _refreshAppLockSetting,
+      ),
+      PayScreen(
+        contactsService: _contactsService,
+        categorizationService: _categorizationService,
+        favoriteContactsService: _favoriteContactsService,
+        simSelectionController: _simSelectionController,
+        plannedPaymentService: _plannedPaymentService,
       ),
       TransactionsScreen(db: _db, categorizationService: _categorizationService),
       BudgetsScreen(budgetService: _budgetService),
       InsightsScreen(
         analytics: _analyticsService,
-        onReviewUncategorized: () => setState(() => _index = 1),
+        onReviewUncategorized: () => setState(() => _index = 2),
       ),
     ];
 
-    return Scaffold(
-      body: IndexedStack(index: _index, children: screens),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Transactions'),
-          NavigationDestination(icon: Icon(Icons.track_changes), label: 'Budgets'),
-          NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),
-        ],
+    return AppLockGate(
+      enabled: _appLockEnabled,
+      child: Scaffold(
+        body: IndexedStack(index: _index, children: screens),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: (i) => setState(() => _index = i),
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+            NavigationDestination(icon: Icon(Icons.bolt_outlined), label: 'Pay'),
+            NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Transactions'),
+            NavigationDestination(icon: Icon(Icons.track_changes), label: 'Budgets'),
+            NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),
+          ],
+        ),
       ),
     );
   }

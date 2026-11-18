@@ -4,31 +4,28 @@ import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
 import '../../sms/sms_ingest_service.dart';
 import '../../theme/theme_controller.dart';
-import 'account_setup_screen.dart';
-import 'permission_summary_screen.dart';
 import 'provider_selection_screen.dart';
-import 'security_setup_screen.dart';
-import 'sms_setup_screen.dart';
-import 'terms_screen.dart';
-import 'theme_choice_screen.dart';
+import 'sms_import_flow.dart';
 import 'welcome_screen.dart';
 
-/// Top-level onboarding controller (spec Phases 5 + 6, extended by the
-/// UI sprint): Welcome → Appearance → Terms & Privacy → Account Setup →
-/// Security Setup → Provider Selection → Permission Summary → SMS
-/// Setup. The permission summary sits immediately before the first OS
-/// permission dialog (sprint #9) so nothing the system asks is a
-/// surprise; the theme choice sits right after Welcome (sprint #3) so
-/// the rest of onboarding is already rendered in the user's chosen
-/// look.
+/// Top-level onboarding controller — 5 steps: Welcome + terms →
+/// Providers → SMS access → (Android prompt) → Scanning → All set.
+/// Steps 3–5 live in [SmsImportFlow].
 ///
-/// Each step writes its own result to the services as the user
-/// completes it, rather than threading state through every screen and
-/// writing once at the end — so a user who force-quits mid-flow doesn't
-/// lose earlier steps on next launch. Only
+/// Everything else that used to be an onboarding step moved out of the
+/// way of a first launch: App Lock and email are on Home's "Finish
+/// setting up" checklist (plus a one-off App Lock reminder), the theme
+/// defaults to Auto and lives in Settings → Appearance (it can also be
+/// changed on the scanning screen while waiting).
+///
+/// SMS "Not now" still completes onboarding: Home opens on its empty
+/// state with "Import your SMS history" on the checklist. Back works on
+/// steps 2–3; not during the scan.
+///
+/// Each step writes its own result as the user completes it, so a user
+/// who force-quits mid-flow doesn't lose earlier steps. Only
 /// [UserProfileService.markOnboardingComplete] is deferred to the very
-/// end, since that flag is what determines whether onboarding shows at
-/// all.
+/// end, since that flag is what decides whether onboarding shows at all.
 class OnboardingFlowScreen extends StatefulWidget {
   const OnboardingFlowScreen({
     super.key,
@@ -49,58 +46,46 @@ class OnboardingFlowScreen extends StatefulWidget {
   State<OnboardingFlowScreen> createState() => _OnboardingFlowScreenState();
 }
 
-enum _Step { welcome, theme, terms, account, security, providers, permissions, sms }
+enum _Step { welcome, providers, sms }
 
 class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
   _Step _step = _Step.welcome;
 
   void _goTo(_Step step) => setState(() => _step = step);
 
-  Future<void> _onThemeSelected(ThemeMode mode) async {
-    // Applies live (the app re-themes under this screen) and persists.
-    await widget.themeController.setMode(mode);
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _onAccountSetupContinue(String email) async {
-    await widget.profileService.updateProfile(email: email);
-    _goTo(_Step.security);
-  }
-
-  Future<void> _onSecuritySetupContinue(bool appLockEnabled) async {
-    await widget.profileService.setAppLockEnabled(appLockEnabled);
-    _goTo(_Step.providers);
-  }
-
-  Future<void> _onSmsSetupComplete() async {
+  Future<void> _finish() async {
     await widget.profileService.markOnboardingComplete();
     widget.onComplete();
   }
 
   @override
   Widget build(BuildContext context) {
-    return switch (_step) {
-      _Step.welcome => WelcomeScreen(onContinue: () => _goTo(_Step.theme)),
-      _Step.theme => ThemeChoiceScreen(
-          current: ThemeController.mode.value,
-          onSelected: _onThemeSelected,
-          onContinue: () => _goTo(_Step.terms),
-        ),
-      _Step.terms => TermsScreen(onContinue: () => _goTo(_Step.account)),
-      _Step.account => AccountSetupScreen(
-          onContinue: _onAccountSetupContinue,
-          onSkip: () => _goTo(_Step.security),
-        ),
-      _Step.security => SecuritySetupScreen(onContinue: _onSecuritySetupContinue),
+    final page = switch (_step) {
+      _Step.welcome => WelcomeScreen(onContinue: () => _goTo(_Step.providers)),
       _Step.providers => ProviderSelectionScreen(
           service: widget.providerSelectionService,
-          onContinue: () => _goTo(_Step.permissions),
+          onContinue: () => _goTo(_Step.sms),
+          onBack: () => _goTo(_Step.welcome),
         ),
-      _Step.permissions => PermissionSummaryScreen(onContinue: () => _goTo(_Step.sms)),
-      _Step.sms => SmsSetupScreen(
+      _Step.sms => SmsImportFlow(
           ingestService: widget.ingestService,
-          onComplete: _onSmsSetupComplete,
+          profileService: widget.profileService,
+          providerSelectionService: widget.providerSelectionService,
+          themeController: widget.themeController,
+          onBack: () => _goTo(_Step.providers),
+          onNotNow: _finish,
+          onFinished: _finish,
         ),
     };
+    // Android back on Providers goes to Welcome; SmsImportFlow handles
+    // its own (back on access, blocked during the scan).
+    if (_step != _Step.providers) return page;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _goTo(_Step.welcome);
+      },
+      child: page,
+    );
   }
 }

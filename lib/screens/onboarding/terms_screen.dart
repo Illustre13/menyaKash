@@ -6,9 +6,12 @@ import 'package:flutter/material.dart';
 /// strongest real guarantee — no internet permission exists, so data
 /// cannot leave the phone.
 class TermsScreen extends StatefulWidget {
-  const TermsScreen({super.key, required this.onContinue});
+  const TermsScreen({super.key, this.onContinue});
 
-  final VoidCallback onContinue;
+  /// Null shows the terms read-only (no "I agree" gate) — how Welcome's
+  /// "Terms of use" / "Privacy policy" links open it now that agreeing
+  /// is "By continuing…" on the Welcome screen itself.
+  final VoidCallback? onContinue;
 
   @override
   State<TermsScreen> createState() => _TermsScreenState();
@@ -84,31 +87,32 @@ class _TermsScreenState extends State<TermsScreen> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-              child: Column(
-                children: [
-                  CheckboxListTile(
-                    value: _agreed,
-                    onChanged: (value) => setState(() => _agreed = value ?? false),
-                    title: const Text('I agree to the terms and privacy policy'),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _agreed ? widget.onContinue : null,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Text('Continue'),
+            if (widget.onContinue != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                child: Column(
+                  children: [
+                    CheckboxListTile(
+                      value: _agreed,
+                      onChanged: (value) => setState(() => _agreed = value ?? false),
+                      title: const Text('I agree to the terms and privacy policy'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _agreed ? widget.onContinue : null,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('Continue'),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -148,8 +152,7 @@ class _TermsSection extends StatelessWidget {
           initiallyExpanded: initiallyExpanded,
           leading: Icon(icon, color: scheme.primary),
           title: Text(title,
-              style:
-                  Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
             Text(body, style: Theme.of(context).textTheme.bodyMedium),

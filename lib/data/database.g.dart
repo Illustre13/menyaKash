@@ -3545,6 +3545,45 @@ class $UserProfileTable extends UserProfile
       defaultConstraints: GeneratedColumn.constraintIsAlways(
           'CHECK ("balance_hidden" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _setupChecklistHiddenMeta =
+      const VerificationMeta('setupChecklistHidden');
+  @override
+  late final GeneratedColumn<bool> setupChecklistHidden = GeneratedColumn<bool>(
+      'setup_checklist_hidden', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("setup_checklist_hidden" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _setupSortedAtMeta =
+      const VerificationMeta('setupSortedAt');
+  @override
+  late final GeneratedColumn<DateTime> setupSortedAt =
+      GeneratedColumn<DateTime>('setup_sorted_at', aliasedName, true,
+          type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _appOpenCountMeta =
+      const VerificationMeta('appOpenCount');
+  @override
+  late final GeneratedColumn<int> appOpenCount = GeneratedColumn<int>(
+      'app_open_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _appLockReminderDismissalsMeta =
+      const VerificationMeta('appLockReminderDismissals');
+  @override
+  late final GeneratedColumn<int> appLockReminderDismissals =
+      GeneratedColumn<int>('app_lock_reminder_dismissals', aliasedName, false,
+          type: DriftSqlType.int,
+          requiredDuringInsert: false,
+          defaultValue: const Constant(0));
+  static const VerificationMeta _appLockReminderSnoozedUntilMeta =
+      const VerificationMeta('appLockReminderSnoozedUntil');
+  @override
+  late final GeneratedColumn<DateTime> appLockReminderSnoozedUntil =
+      GeneratedColumn<DateTime>(
+          'app_lock_reminder_snoozed_until', aliasedName, true,
+          type: DriftSqlType.dateTime, requiredDuringInsert: false);
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -3566,6 +3605,11 @@ class $UserProfileTable extends UserProfile
         referralCode,
         lastIncrementalScanAt,
         balanceHidden,
+        setupChecklistHidden,
+        setupSortedAt,
+        appOpenCount,
+        appLockReminderDismissals,
+        appLockReminderSnoozedUntil,
         createdAt
       ];
   @override
@@ -3635,6 +3679,38 @@ class $UserProfileTable extends UserProfile
           balanceHidden.isAcceptableOrUnknown(
               data['balance_hidden']!, _balanceHiddenMeta));
     }
+    if (data.containsKey('setup_checklist_hidden')) {
+      context.handle(
+          _setupChecklistHiddenMeta,
+          setupChecklistHidden.isAcceptableOrUnknown(
+              data['setup_checklist_hidden']!, _setupChecklistHiddenMeta));
+    }
+    if (data.containsKey('setup_sorted_at')) {
+      context.handle(
+          _setupSortedAtMeta,
+          setupSortedAt.isAcceptableOrUnknown(
+              data['setup_sorted_at']!, _setupSortedAtMeta));
+    }
+    if (data.containsKey('app_open_count')) {
+      context.handle(
+          _appOpenCountMeta,
+          appOpenCount.isAcceptableOrUnknown(
+              data['app_open_count']!, _appOpenCountMeta));
+    }
+    if (data.containsKey('app_lock_reminder_dismissals')) {
+      context.handle(
+          _appLockReminderDismissalsMeta,
+          appLockReminderDismissals.isAcceptableOrUnknown(
+              data['app_lock_reminder_dismissals']!,
+              _appLockReminderDismissalsMeta));
+    }
+    if (data.containsKey('app_lock_reminder_snoozed_until')) {
+      context.handle(
+          _appLockReminderSnoozedUntilMeta,
+          appLockReminderSnoozedUntil.isAcceptableOrUnknown(
+              data['app_lock_reminder_snoozed_until']!,
+              _appLockReminderSnoozedUntilMeta));
+    }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
           createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
@@ -3672,6 +3748,18 @@ class $UserProfileTable extends UserProfile
           data['${effectivePrefix}last_incremental_scan_at']),
       balanceHidden: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}balance_hidden'])!,
+      setupChecklistHidden: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}setup_checklist_hidden'])!,
+      setupSortedAt: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime, data['${effectivePrefix}setup_sorted_at']),
+      appOpenCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}app_open_count'])!,
+      appLockReminderDismissals: attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}app_lock_reminder_dismissals'])!,
+      appLockReminderSnoozedUntil: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime,
+          data['${effectivePrefix}app_lock_reminder_snoozed_until']),
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
     );
@@ -3712,8 +3800,8 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
 
   /// Persisted theme choice (spec sprint #3): 'light' | 'dark' |
   /// 'system'. Null means the user never chose (pre-v5 install or
-  /// skipped the onboarding theme step) — the app then defaults to
-  /// Light, per product decision, not to system. Stored as text rather
+  /// installed after the 5-step onboarding, which no longer asks) — the
+  /// app then follows the system (Auto), per the onboarding redesign. Stored as text rather
   /// than a Dart enum ordinal so a DB inspected outside the app reads
   /// meaningfully and enum reordering can never corrupt it.
   final String? themeMode;
@@ -3747,6 +3835,30 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
   /// the choice survives an app restart, same as [themeMode]; defaults
   /// to visible (false) so this is purely additive for existing users.
   final bool balanceHidden;
+
+  /// Home's "Finish setting up" checklist was closed with its X. Done
+  /// steps are derived from real state (App Lock on, email set, …), so
+  /// only this explicit hide needs storing; Profile keeps a dot while
+  /// it's hidden and steps remain.
+  final bool setupChecklistHidden;
+
+  /// When the user came back from the checklist's "Sort your
+  /// transactions" step. There's no natural "fully categorized" state to
+  /// derive (new SMS keep arriving uncategorized), so the step counts as
+  /// done once they've been through the Categorize screen.
+  final DateTime? setupSortedAt;
+
+  /// Launches since onboarding finished. The App Lock reminder sheet
+  /// waits until the 3rd open so it never ambushes a brand-new user.
+  final int appOpenCount;
+
+  /// "Not now" taps on the App Lock reminder. Two dismissals stop it
+  /// for good; Settings still has the toggle.
+  final int appLockReminderDismissals;
+
+  /// The App Lock reminder stays quiet until this time (7 days after a
+  /// "Not now").
+  final DateTime? appLockReminderSnoozedUntil;
   final DateTime createdAt;
   const UserProfileData(
       {required this.id,
@@ -3760,6 +3872,11 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       this.referralCode,
       this.lastIncrementalScanAt,
       required this.balanceHidden,
+      required this.setupChecklistHidden,
+      this.setupSortedAt,
+      required this.appOpenCount,
+      required this.appLockReminderDismissals,
+      this.appLockReminderSnoozedUntil,
       required this.createdAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3793,6 +3910,17 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           Variable<DateTime>(lastIncrementalScanAt);
     }
     map['balance_hidden'] = Variable<bool>(balanceHidden);
+    map['setup_checklist_hidden'] = Variable<bool>(setupChecklistHidden);
+    if (!nullToAbsent || setupSortedAt != null) {
+      map['setup_sorted_at'] = Variable<DateTime>(setupSortedAt);
+    }
+    map['app_open_count'] = Variable<int>(appOpenCount);
+    map['app_lock_reminder_dismissals'] =
+        Variable<int>(appLockReminderDismissals);
+    if (!nullToAbsent || appLockReminderSnoozedUntil != null) {
+      map['app_lock_reminder_snoozed_until'] =
+          Variable<DateTime>(appLockReminderSnoozedUntil);
+    }
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -3824,6 +3952,16 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           ? const Value.absent()
           : Value(lastIncrementalScanAt),
       balanceHidden: Value(balanceHidden),
+      setupChecklistHidden: Value(setupChecklistHidden),
+      setupSortedAt: setupSortedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(setupSortedAt),
+      appOpenCount: Value(appOpenCount),
+      appLockReminderDismissals: Value(appLockReminderDismissals),
+      appLockReminderSnoozedUntil:
+          appLockReminderSnoozedUntil == null && nullToAbsent
+              ? const Value.absent()
+              : Value(appLockReminderSnoozedUntil),
       createdAt: Value(createdAt),
     );
   }
@@ -3845,6 +3983,14 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       lastIncrementalScanAt:
           serializer.fromJson<DateTime?>(json['lastIncrementalScanAt']),
       balanceHidden: serializer.fromJson<bool>(json['balanceHidden']),
+      setupChecklistHidden:
+          serializer.fromJson<bool>(json['setupChecklistHidden']),
+      setupSortedAt: serializer.fromJson<DateTime?>(json['setupSortedAt']),
+      appOpenCount: serializer.fromJson<int>(json['appOpenCount']),
+      appLockReminderDismissals:
+          serializer.fromJson<int>(json['appLockReminderDismissals']),
+      appLockReminderSnoozedUntil:
+          serializer.fromJson<DateTime?>(json['appLockReminderSnoozedUntil']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -3865,6 +4011,13 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       'lastIncrementalScanAt':
           serializer.toJson<DateTime?>(lastIncrementalScanAt),
       'balanceHidden': serializer.toJson<bool>(balanceHidden),
+      'setupChecklistHidden': serializer.toJson<bool>(setupChecklistHidden),
+      'setupSortedAt': serializer.toJson<DateTime?>(setupSortedAt),
+      'appOpenCount': serializer.toJson<int>(appOpenCount),
+      'appLockReminderDismissals':
+          serializer.toJson<int>(appLockReminderDismissals),
+      'appLockReminderSnoozedUntil':
+          serializer.toJson<DateTime?>(appLockReminderSnoozedUntil),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -3881,6 +4034,11 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           Value<String?> referralCode = const Value.absent(),
           Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
           bool? balanceHidden,
+          bool? setupChecklistHidden,
+          Value<DateTime?> setupSortedAt = const Value.absent(),
+          int? appOpenCount,
+          int? appLockReminderDismissals,
+          Value<DateTime?> appLockReminderSnoozedUntil = const Value.absent(),
           DateTime? createdAt}) =>
       UserProfileData(
         id: id ?? this.id,
@@ -3899,6 +4057,15 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
             ? lastIncrementalScanAt.value
             : this.lastIncrementalScanAt,
         balanceHidden: balanceHidden ?? this.balanceHidden,
+        setupChecklistHidden: setupChecklistHidden ?? this.setupChecklistHidden,
+        setupSortedAt:
+            setupSortedAt.present ? setupSortedAt.value : this.setupSortedAt,
+        appOpenCount: appOpenCount ?? this.appOpenCount,
+        appLockReminderDismissals:
+            appLockReminderDismissals ?? this.appLockReminderDismissals,
+        appLockReminderSnoozedUntil: appLockReminderSnoozedUntil.present
+            ? appLockReminderSnoozedUntil.value
+            : this.appLockReminderSnoozedUntil,
         createdAt: createdAt ?? this.createdAt,
       );
   UserProfileData copyWithCompanion(UserProfileCompanion data) {
@@ -3926,6 +4093,21 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       balanceHidden: data.balanceHidden.present
           ? data.balanceHidden.value
           : this.balanceHidden,
+      setupChecklistHidden: data.setupChecklistHidden.present
+          ? data.setupChecklistHidden.value
+          : this.setupChecklistHidden,
+      setupSortedAt: data.setupSortedAt.present
+          ? data.setupSortedAt.value
+          : this.setupSortedAt,
+      appOpenCount: data.appOpenCount.present
+          ? data.appOpenCount.value
+          : this.appOpenCount,
+      appLockReminderDismissals: data.appLockReminderDismissals.present
+          ? data.appLockReminderDismissals.value
+          : this.appLockReminderDismissals,
+      appLockReminderSnoozedUntil: data.appLockReminderSnoozedUntil.present
+          ? data.appLockReminderSnoozedUntil.value
+          : this.appLockReminderSnoozedUntil,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -3944,6 +4126,11 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           ..write('referralCode: $referralCode, ')
           ..write('lastIncrementalScanAt: $lastIncrementalScanAt, ')
           ..write('balanceHidden: $balanceHidden, ')
+          ..write('setupChecklistHidden: $setupChecklistHidden, ')
+          ..write('setupSortedAt: $setupSortedAt, ')
+          ..write('appOpenCount: $appOpenCount, ')
+          ..write('appLockReminderDismissals: $appLockReminderDismissals, ')
+          ..write('appLockReminderSnoozedUntil: $appLockReminderSnoozedUntil, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -3962,6 +4149,11 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
       referralCode,
       lastIncrementalScanAt,
       balanceHidden,
+      setupChecklistHidden,
+      setupSortedAt,
+      appOpenCount,
+      appLockReminderDismissals,
+      appLockReminderSnoozedUntil,
       createdAt);
   @override
   bool operator ==(Object other) =>
@@ -3978,6 +4170,12 @@ class UserProfileData extends DataClass implements Insertable<UserProfileData> {
           other.referralCode == this.referralCode &&
           other.lastIncrementalScanAt == this.lastIncrementalScanAt &&
           other.balanceHidden == this.balanceHidden &&
+          other.setupChecklistHidden == this.setupChecklistHidden &&
+          other.setupSortedAt == this.setupSortedAt &&
+          other.appOpenCount == this.appOpenCount &&
+          other.appLockReminderDismissals == this.appLockReminderDismissals &&
+          other.appLockReminderSnoozedUntil ==
+              this.appLockReminderSnoozedUntil &&
           other.createdAt == this.createdAt);
 }
 
@@ -3993,6 +4191,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
   final Value<String?> referralCode;
   final Value<DateTime?> lastIncrementalScanAt;
   final Value<bool> balanceHidden;
+  final Value<bool> setupChecklistHidden;
+  final Value<DateTime?> setupSortedAt;
+  final Value<int> appOpenCount;
+  final Value<int> appLockReminderDismissals;
+  final Value<DateTime?> appLockReminderSnoozedUntil;
   final Value<DateTime> createdAt;
   const UserProfileCompanion({
     this.id = const Value.absent(),
@@ -4006,6 +4209,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     this.referralCode = const Value.absent(),
     this.lastIncrementalScanAt = const Value.absent(),
     this.balanceHidden = const Value.absent(),
+    this.setupChecklistHidden = const Value.absent(),
+    this.setupSortedAt = const Value.absent(),
+    this.appOpenCount = const Value.absent(),
+    this.appLockReminderDismissals = const Value.absent(),
+    this.appLockReminderSnoozedUntil = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   UserProfileCompanion.insert({
@@ -4020,6 +4228,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     this.referralCode = const Value.absent(),
     this.lastIncrementalScanAt = const Value.absent(),
     this.balanceHidden = const Value.absent(),
+    this.setupChecklistHidden = const Value.absent(),
+    this.setupSortedAt = const Value.absent(),
+    this.appOpenCount = const Value.absent(),
+    this.appLockReminderDismissals = const Value.absent(),
+    this.appLockReminderSnoozedUntil = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   static Insertable<UserProfileData> custom({
@@ -4034,6 +4247,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     Expression<String>? referralCode,
     Expression<DateTime>? lastIncrementalScanAt,
     Expression<bool>? balanceHidden,
+    Expression<bool>? setupChecklistHidden,
+    Expression<DateTime>? setupSortedAt,
+    Expression<int>? appOpenCount,
+    Expression<int>? appLockReminderDismissals,
+    Expression<DateTime>? appLockReminderSnoozedUntil,
     Expression<DateTime>? createdAt,
   }) {
     return RawValuesInsertable({
@@ -4050,6 +4268,14 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
       if (lastIncrementalScanAt != null)
         'last_incremental_scan_at': lastIncrementalScanAt,
       if (balanceHidden != null) 'balance_hidden': balanceHidden,
+      if (setupChecklistHidden != null)
+        'setup_checklist_hidden': setupChecklistHidden,
+      if (setupSortedAt != null) 'setup_sorted_at': setupSortedAt,
+      if (appOpenCount != null) 'app_open_count': appOpenCount,
+      if (appLockReminderDismissals != null)
+        'app_lock_reminder_dismissals': appLockReminderDismissals,
+      if (appLockReminderSnoozedUntil != null)
+        'app_lock_reminder_snoozed_until': appLockReminderSnoozedUntil,
       if (createdAt != null) 'created_at': createdAt,
     });
   }
@@ -4066,6 +4292,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
       Value<String?>? referralCode,
       Value<DateTime?>? lastIncrementalScanAt,
       Value<bool>? balanceHidden,
+      Value<bool>? setupChecklistHidden,
+      Value<DateTime?>? setupSortedAt,
+      Value<int>? appOpenCount,
+      Value<int>? appLockReminderDismissals,
+      Value<DateTime?>? appLockReminderSnoozedUntil,
       Value<DateTime>? createdAt}) {
     return UserProfileCompanion(
       id: id ?? this.id,
@@ -4081,6 +4312,13 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
       lastIncrementalScanAt:
           lastIncrementalScanAt ?? this.lastIncrementalScanAt,
       balanceHidden: balanceHidden ?? this.balanceHidden,
+      setupChecklistHidden: setupChecklistHidden ?? this.setupChecklistHidden,
+      setupSortedAt: setupSortedAt ?? this.setupSortedAt,
+      appOpenCount: appOpenCount ?? this.appOpenCount,
+      appLockReminderDismissals:
+          appLockReminderDismissals ?? this.appLockReminderDismissals,
+      appLockReminderSnoozedUntil:
+          appLockReminderSnoozedUntil ?? this.appLockReminderSnoozedUntil,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -4123,6 +4361,24 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
     if (balanceHidden.present) {
       map['balance_hidden'] = Variable<bool>(balanceHidden.value);
     }
+    if (setupChecklistHidden.present) {
+      map['setup_checklist_hidden'] =
+          Variable<bool>(setupChecklistHidden.value);
+    }
+    if (setupSortedAt.present) {
+      map['setup_sorted_at'] = Variable<DateTime>(setupSortedAt.value);
+    }
+    if (appOpenCount.present) {
+      map['app_open_count'] = Variable<int>(appOpenCount.value);
+    }
+    if (appLockReminderDismissals.present) {
+      map['app_lock_reminder_dismissals'] =
+          Variable<int>(appLockReminderDismissals.value);
+    }
+    if (appLockReminderSnoozedUntil.present) {
+      map['app_lock_reminder_snoozed_until'] =
+          Variable<DateTime>(appLockReminderSnoozedUntil.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -4143,6 +4399,11 @@ class UserProfileCompanion extends UpdateCompanion<UserProfileData> {
           ..write('referralCode: $referralCode, ')
           ..write('lastIncrementalScanAt: $lastIncrementalScanAt, ')
           ..write('balanceHidden: $balanceHidden, ')
+          ..write('setupChecklistHidden: $setupChecklistHidden, ')
+          ..write('setupSortedAt: $setupSortedAt, ')
+          ..write('appOpenCount: $appOpenCount, ')
+          ..write('appLockReminderDismissals: $appLockReminderDismissals, ')
+          ..write('appLockReminderSnoozedUntil: $appLockReminderSnoozedUntil, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -7463,6 +7724,11 @@ typedef $$UserProfileTableCreateCompanionBuilder = UserProfileCompanion
   Value<String?> referralCode,
   Value<DateTime?> lastIncrementalScanAt,
   Value<bool> balanceHidden,
+  Value<bool> setupChecklistHidden,
+  Value<DateTime?> setupSortedAt,
+  Value<int> appOpenCount,
+  Value<int> appLockReminderDismissals,
+  Value<DateTime?> appLockReminderSnoozedUntil,
   Value<DateTime> createdAt,
 });
 typedef $$UserProfileTableUpdateCompanionBuilder = UserProfileCompanion
@@ -7478,6 +7744,11 @@ typedef $$UserProfileTableUpdateCompanionBuilder = UserProfileCompanion
   Value<String?> referralCode,
   Value<DateTime?> lastIncrementalScanAt,
   Value<bool> balanceHidden,
+  Value<bool> setupChecklistHidden,
+  Value<DateTime?> setupSortedAt,
+  Value<int> appOpenCount,
+  Value<int> appLockReminderDismissals,
+  Value<DateTime?> appLockReminderSnoozedUntil,
   Value<DateTime> createdAt,
 });
 
@@ -7525,6 +7796,24 @@ class $$UserProfileTableFilterComposer
 
   ColumnFilters<bool> get balanceHidden => $composableBuilder(
       column: $table.balanceHidden, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get setupChecklistHidden => $composableBuilder(
+      column: $table.setupChecklistHidden,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get setupSortedAt => $composableBuilder(
+      column: $table.setupSortedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get appOpenCount => $composableBuilder(
+      column: $table.appOpenCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get appLockReminderDismissals => $composableBuilder(
+      column: $table.appLockReminderDismissals,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get appLockReminderSnoozedUntil => $composableBuilder(
+      column: $table.appLockReminderSnoozedUntil,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -7577,6 +7866,27 @@ class $$UserProfileTableOrderingComposer
       column: $table.balanceHidden,
       builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<bool> get setupChecklistHidden => $composableBuilder(
+      column: $table.setupChecklistHidden,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get setupSortedAt => $composableBuilder(
+      column: $table.setupSortedAt,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get appOpenCount => $composableBuilder(
+      column: $table.appOpenCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get appLockReminderDismissals => $composableBuilder(
+      column: $table.appLockReminderDismissals,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get appLockReminderSnoozedUntil =>
+      $composableBuilder(
+          column: $table.appLockReminderSnoozedUntil,
+          builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 }
@@ -7623,6 +7933,23 @@ class $$UserProfileTableAnnotationComposer
   GeneratedColumn<bool> get balanceHidden => $composableBuilder(
       column: $table.balanceHidden, builder: (column) => column);
 
+  GeneratedColumn<bool> get setupChecklistHidden => $composableBuilder(
+      column: $table.setupChecklistHidden, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get setupSortedAt => $composableBuilder(
+      column: $table.setupSortedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get appOpenCount => $composableBuilder(
+      column: $table.appOpenCount, builder: (column) => column);
+
+  GeneratedColumn<int> get appLockReminderDismissals => $composableBuilder(
+      column: $table.appLockReminderDismissals, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get appLockReminderSnoozedUntil =>
+      $composableBuilder(
+          column: $table.appLockReminderSnoozedUntil,
+          builder: (column) => column);
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 }
@@ -7664,6 +7991,11 @@ class $$UserProfileTableTableManager extends RootTableManager<
             Value<String?> referralCode = const Value.absent(),
             Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
             Value<bool> balanceHidden = const Value.absent(),
+            Value<bool> setupChecklistHidden = const Value.absent(),
+            Value<DateTime?> setupSortedAt = const Value.absent(),
+            Value<int> appOpenCount = const Value.absent(),
+            Value<int> appLockReminderDismissals = const Value.absent(),
+            Value<DateTime?> appLockReminderSnoozedUntil = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
           }) =>
               UserProfileCompanion(
@@ -7678,6 +8010,11 @@ class $$UserProfileTableTableManager extends RootTableManager<
             referralCode: referralCode,
             lastIncrementalScanAt: lastIncrementalScanAt,
             balanceHidden: balanceHidden,
+            setupChecklistHidden: setupChecklistHidden,
+            setupSortedAt: setupSortedAt,
+            appOpenCount: appOpenCount,
+            appLockReminderDismissals: appLockReminderDismissals,
+            appLockReminderSnoozedUntil: appLockReminderSnoozedUntil,
             createdAt: createdAt,
           ),
           createCompanionCallback: ({
@@ -7692,6 +8029,11 @@ class $$UserProfileTableTableManager extends RootTableManager<
             Value<String?> referralCode = const Value.absent(),
             Value<DateTime?> lastIncrementalScanAt = const Value.absent(),
             Value<bool> balanceHidden = const Value.absent(),
+            Value<bool> setupChecklistHidden = const Value.absent(),
+            Value<DateTime?> setupSortedAt = const Value.absent(),
+            Value<int> appOpenCount = const Value.absent(),
+            Value<int> appLockReminderDismissals = const Value.absent(),
+            Value<DateTime?> appLockReminderSnoozedUntil = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
           }) =>
               UserProfileCompanion.insert(
@@ -7706,6 +8048,11 @@ class $$UserProfileTableTableManager extends RootTableManager<
             referralCode: referralCode,
             lastIncrementalScanAt: lastIncrementalScanAt,
             balanceHidden: balanceHidden,
+            setupChecklistHidden: setupChecklistHidden,
+            setupSortedAt: setupSortedAt,
+            appOpenCount: appOpenCount,
+            appLockReminderDismissals: appLockReminderDismissals,
+            appLockReminderSnoozedUntil: appLockReminderSnoozedUntil,
             createdAt: createdAt,
           ),
           withReferenceMapper: (p0) => p0

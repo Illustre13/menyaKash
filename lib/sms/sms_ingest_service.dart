@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show Value, DateTimeAggregate;
 import 'package:flutter/foundation.dart' show compute;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:telephony/telephony.dart' as telephony_pkg;
@@ -77,6 +77,14 @@ class SmsIngestService {
 
   Future<bool> hasPermissions() async {
     return await Permission.sms.isGranted;
+  }
+
+  /// Timestamp of the oldest imported transaction — "going back to
+  /// March 2024" on onboarding's All set screen. Null when none exist.
+  Future<DateTime?> earliestTransactionAt() async {
+    final oldest = _db.transactions.timestamp.min();
+    final row = await (_db.selectOnly(_db.transactions)..addColumns([oldest])).getSingle();
+    return row.read(oldest);
   }
 
   /// Scans the full existing SMS inbox once — intended for first-run

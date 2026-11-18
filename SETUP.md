@@ -62,7 +62,7 @@ flutter doctor --android-licenses     # answer y to everything
 
 ### 3.3 Use Android Studio's bundled Java
 
-The build targets Java 17 (Gradle 9.1, AGP 9.0.1, Kotlin 2.3). A newer system
+The build targets Java 17 (Gradle 9.5, AGP 9.1.1, Kotlin 2.3). A newer system
 JDK (e.g. Java 25) can break the build, so point Flutter at the JDK that ships
 with Android Studio:
 
@@ -153,7 +153,8 @@ dart run build_runner build --delete-conflicting-outputs
 |---|---|
 | `Namespace not specified` or `jvmTarget` mismatch in `:telephony` | The patch in 3.4 is missing or was wiped. Redo it. |
 | `Unsupported class file major version 69` | Gradle is running on Java 25. Redo 3.3. |
-| `Your project's Gradle version (…) is lower than Flutter's minimum supported version` | Newer Flutter releases raise the Gradle floor. Bump `distributionUrl` in `android/gradle/wrapper/gradle-wrapper.properties` to the version the error names (currently 9.3.1). |
+| `Your project's Gradle version (…) is lower than Flutter's minimum supported version` | Newer Flutter releases raise the Gradle floor. Bump `distributionUrl` in `android/gradle/wrapper/gradle-wrapper.properties` to the version the error names (currently 9.5.0). |
+| `Your project's Android Gradle Plugin version (…) is lower than Flutter's minimum` | Bump `id("com.android.application") version "…"` in `android/settings.gradle.kts` (currently 9.1.1). |
 | `java.io.IOException: Premature EOF` during the first build | The Gradle download was cut off. Re-run; it resumes. |
 | `flutter.sdk not set in local.properties` | Run `flutter pub get` once from the project folder. |
 | Kotlin incremental-cache crash (`flutter_contacts`) | Already worked around in `android/gradle.properties`. Run `flutter clean` and retry. |

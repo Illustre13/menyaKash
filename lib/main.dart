@@ -9,6 +9,7 @@ import 'contacts/contacts_service.dart';
 import 'contacts/favorite_contacts_service.dart';
 import 'data/database.dart';
 import 'parsers/momo_parser_registry.dart';
+import 'menyacash_loader.dart';
 import 'profile/referral_service.dart';
 import 'profile/user_profile_service.dart';
 import 'providers/provider_detector_factory.dart';
@@ -118,8 +119,13 @@ class _HomeShellState extends State<HomeShell> {
     // loading state — a dark-theme user shouldn't get a light flash on
     // every launch (sprint #3).
     await _themeController.loadSaved();
+    // Keep the MenyaLoader splash up for at least one full cycle so it
+    // reads as a deliberate splash rather than a flicker.
+    final minSplash = Future<void>.delayed(const Duration(milliseconds: 1600));
     final onboarded = await _profileService.hasCompletedOnboarding();
     if (onboarded) {
+      // Counts launches for the App Lock reminder (from the 3rd open).
+      await _profileService.recordAppOpen();
       // Historical scan already happened during onboarding: just resume
       // live listening and catch up on any transfer pairs formed by
       // messages received since the last launch.
@@ -129,6 +135,8 @@ class _HomeShellState extends State<HomeShell> {
       unawaited(_transferEngine.findAndLinkTransfers());
     }
     final profile = await _profileService.currentProfile();
+    await minSplash;
+    if (!mounted) return;
     setState(() {
       _alreadyOnboarded = onboarded;
       _appLockEnabled = profile?.appLockEnabled ?? false;
@@ -166,7 +174,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     if (_alreadyOnboarded == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: MenyaLoader()));
     }
 
     if (_alreadyOnboarded == false) {

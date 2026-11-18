@@ -8,6 +8,7 @@ import 'contacts/contacts_service.dart';
 import 'contacts/favorite_contacts_service.dart';
 import 'data/database.dart';
 import 'data/dev_seed_data.dart';
+import 'menyacash_loader.dart';
 import 'profile/referral_service.dart';
 import 'profile/user_profile_service.dart';
 import 'payments/planned_payment_service.dart';
@@ -95,7 +96,7 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
   @override
   Widget build(BuildContext context) {
     if (!_seeded) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: MenyaLoader()));
     }
 
     final screens = [

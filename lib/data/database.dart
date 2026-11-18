@@ -398,10 +398,10 @@ class UserProfile extends Table {
   DateTimeColumn get onboardingCompletedAt => dateTime().nullable()();
 
   /// Persisted theme choice (spec sprint #3): 'light' | 'dark' |
-  /// 'system'. Null means the user never chose (pre-v5 install or
-  /// skipped the onboarding theme step) — the app then defaults to
-  /// Light, per product decision, not to system. Stored as text rather
-  /// than a Dart enum ordinal so a DB inspected outside the app reads
+  /// 'system'. Null means the user never chose (pre-v5 install, or any
+  /// install since the 5-step onboarding, which no longer asks) — the
+  /// app then follows the system (Auto). Stored as text rather than a
+  /// Dart enum ordinal so a DB inspected outside the app reads
   /// meaningfully and enum reordering can never corrupt it.
   TextColumn get themeMode => text().nullable()();
 
@@ -434,6 +434,30 @@ class UserProfile extends Table {
   /// the choice survives an app restart, same as [themeMode]; defaults
   /// to visible (false) so this is purely additive for existing users.
   BoolColumn get balanceHidden => boolean().withDefault(const Constant(false))();
+
+  /// Home's "Finish setting up" checklist was closed with its X. Done
+  /// steps are derived from real state (App Lock on, email set, …), so
+  /// only this explicit hide needs storing; Profile keeps a dot while
+  /// it's hidden and steps remain.
+  BoolColumn get setupChecklistHidden => boolean().withDefault(const Constant(false))();
+
+  /// When the user came back from the checklist's "Sort your
+  /// transactions" step. There's no natural "fully categorized" state to
+  /// derive (new SMS keep arriving uncategorized), so the step counts as
+  /// done once they've been through the Categorize screen.
+  DateTimeColumn get setupSortedAt => dateTime().nullable()();
+
+  /// Launches since onboarding finished. The App Lock reminder sheet
+  /// waits until the 3rd open so it never ambushes a brand-new user.
+  IntColumn get appOpenCount => integer().withDefault(const Constant(0))();
+
+  /// "Not now" taps on the App Lock reminder. Two dismissals stop it
+  /// for good; Settings still has the toggle.
+  IntColumn get appLockReminderDismissals => integer().withDefault(const Constant(0))();
+
+  /// The App Lock reminder stays quiet until this time (7 days after a
+  /// "Not now").
+  DateTimeColumn get appLockReminderSnoozedUntil => dateTime().nullable()();
 
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
@@ -643,7 +667,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -772,6 +796,16 @@ class AppDatabase extends _$AppDatabase {
             // Planned payments (category-before-dialing review batch)
             // — a brand-new table, safe to create unconditionally.
             await m.createTable(plannedPayments);
+          }
+          if (from < 16 && from >= 4) {
+            // Post-onboarding setup checklist + App Lock reminder
+            // (5-step onboarding redesign). Same from >= 4 guard as
+            // every other userProfile column added after its creation.
+            await m.addColumn(userProfile, userProfile.setupChecklistHidden);
+            await m.addColumn(userProfile, userProfile.setupSortedAt);
+            await m.addColumn(userProfile, userProfile.appOpenCount);
+            await m.addColumn(userProfile, userProfile.appLockReminderDismissals);
+            await m.addColumn(userProfile, userProfile.appLockReminderSnoozedUntil);
           }
         },
       );

@@ -8,6 +8,7 @@ import '../../profile/referral_service.dart';
 import '../../profile/user_profile_service.dart';
 import '../../providers/provider_selection_service.dart';
 import '../../sms/sms_ingest_service.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/provider_assets.dart';
 import 'referral_screen.dart';
 import 'settings_screen.dart';
@@ -25,7 +26,12 @@ class ProfileScreen extends StatefulWidget {
     required this.providerSelectionService,
     required this.referralService,
     this.smsIngestService,
+    this.showFinishSetup = false,
   });
+
+  /// Home's setup checklist is hidden but unfinished: offer a way back
+  /// to it (the matching dot sits on Home's Profile icon).
+  final bool showFinishSetup;
 
   final UserProfileService profileService;
   final AccountsService accountsService;
@@ -64,15 +70,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _openSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SettingsScreen(
-          profileService: widget.profileService,
-          providerSelectionService: widget.providerSelectionService,
-          smsIngestService: widget.smsIngestService,
-        ),
-      ),
-    ).then((_) => _load());
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => SettingsScreen(
+              profileService: widget.profileService,
+              providerSelectionService: widget.providerSelectionService,
+              smsIngestService: widget.smsIngestService,
+            ),
+          ),
+        )
+        .then((_) => _load());
   }
 
   void _openReferral() {
@@ -131,6 +139,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                if (widget.showFinishSetup) ...[
+                  Card(
+                    child: ListTile(
+                      leading: const Badge(
+                        smallSize: 8,
+                        backgroundColor: AppBrand.orangeLight,
+                        child: Icon(Icons.checklist_rtl),
+                      ),
+                      title: const Text('Finish setting up'),
+                      subtitle: const Text('Show the checklist on Home again'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () async {
+                        await widget.profileService.setSetupChecklistHidden(false);
+                        if (context.mounted) Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 Card(
                   child: Column(
                     children: [
@@ -147,7 +174,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ListTile(
                         leading: const Icon(Icons.security_outlined),
                         title: const Text('Security'),
-                        subtitle: Text(profile.appLockEnabled ? 'App Lock enabled' : 'App Lock off'),
+                        subtitle:
+                            Text(profile.appLockEnabled ? 'App Lock enabled' : 'App Lock off'),
                         onTap: _openSettings,
                         trailing: const Icon(Icons.chevron_right),
                       ),

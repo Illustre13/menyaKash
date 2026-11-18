@@ -16,6 +16,7 @@ import '../profile/user_profile_service.dart';
 import '../providers/provider_selection_service.dart';
 import '../sms/sms_ingest_service.dart';
 import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
 import '../ussd/sim_selection_controller.dart';
 import '../ussd/ussd_builder.dart';
 import '../ussd/ussd_dialer.dart';
@@ -24,9 +25,15 @@ import '../utilities/saved_meter_service.dart';
 import '../widgets/coming_soon_popup.dart';
 import '../widgets/design_system.dart';
 import '../widgets/transaction_tile.dart';
+import 'categorize_screen.dart';
 import 'dashboard/overview_card.dart';
+import 'onboarding/provider_selection_screen.dart';
+import 'onboarding/sms_import_flow.dart';
 import 'pay_screen.dart';
 import 'profile/profile_screen.dart';
+import 'setup/app_lock_reminder_sheet.dart';
+import 'setup/app_lock_setup_screen.dart';
+import 'setup/setup_checklist_card.dart';
 
 /// The Home tab (UI redesign): greeting, balance hero with wallet
 /// breakdown, a single Pay quick action (Transactions/Budgets/Insights
@@ -126,10 +133,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<int, String> _providerNames = const {};
   Set<int> _transferIds = const {};
 
+  // "Finish setting up" checklist (onboarding redesign screen 6). Null
+  // until first loaded; every step's done-state is derived from real
+  // state, so this is re-read whenever a step could have changed.
+  _SetupState? _setup;
+
   @override
   void initState() {
     super.initState();
     _reload();
+    unawaited(_loadSetup().then((_) => _maybeRemindAppLock()));
     // Catch up on any provider SMS that arrived since the app was last
     // opened (spec review batch item #3) — fire-and-forget: the account
     // balance/transaction Streams already wired below re-emit on their
@@ -160,6 +173,157 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     _loadLookups();
   }
+
+  Future<void> _loadSetup() async {
+    final profile = await widget.profileService.currentProfile();
+    final providers = await widget.providerSelectionService.selectedProviders();
+    // Web dev preview has no SMS inbox — treat the import as done there.
+    final smsGranted = await widget.smsIngestService?.hasPermissions() ?? true;
+    if (!mounted) return;
+    setState(() {
+      _setup = _SetupState(
+        hidden: profile?.setupChecklistHidden ?? false,
+        appLock: profile?.appLockEnabled ?? false,
+        sorted: profile?.setupSortedAt != null,
+        email: (profile?.email ?? '').isNotEmpty,
+        accounts: providers.isNotEmpty,
+        sms: smsGranted,
+      );
+    });
+  }
+
+  /// The one-off App Lock reminder sheet (screen 7) — once per launch at
+  /// most, only from Home, and only per the reminder rules in
+  /// [UserProfileService.shouldShowAppLockReminder].
+  Future<void> _maybeRemindAppLock() async {
+    final profile = await widget.profileService.currentProfile();
+    if (!mounted || !UserProfileService.shouldShowAppLockReminder(profile)) return;
+    final enabled = await showAppLockReminderSheet(
+      context,
+      profileService: widget.profileService,
+      dismissalsSoFar: profile!.appLockReminderDismissals,
+    );
+    if (enabled) widget.onReturnFromProfile?.call();
+    await _loadSetup();
+  }
+
+  Future<void> _openProfile() async {
+    final setup = _setup;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(
+          profileService: widget.profileService,
+          accountsService: widget.accountsService,
+          providerSelectionService: widget.providerSelectionService,
+          referralService: widget.referralService,
+          smsIngestService: widget.smsIngestService,
+          showFinishSetup: setup != null && setup.hidden && !setup.allDone,
+        ),
+      ),
+    );
+    // Settings (reached from Profile) may have just enabled a provider
+    // and backfilled its history, or changed App Lock — reload so a
+    // newly-imported balance shows without needing a manual
+    // pull-to-refresh.
+    if (!mounted) return;
+    setState(_reload);
+    widget.onReturnFromProfile?.call();
+    await _loadSetup();
+  }
+
+  Future<void> _setUpAppLock() async {
+    final enabled = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => AppLockSetupScreen(profileService: widget.profileService)),
+    );
+    if (enabled == true) widget.onReturnFromProfile?.call();
+    await _loadSetup();
+  }
+
+  Future<void> _sortTransactions() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => CategorizeScreen(service: widget.categorizationService)),
+    );
+    await widget.profileService.markTransactionsSorted();
+    await _loadSetup();
+    // Sorting is what makes Insights meaningful — land there next.
+    widget.onOpenInsights();
+  }
+
+  Future<void> _chooseAccounts() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ProviderSelectionScreen(
+          service: widget.providerSelectionService,
+          inOnboarding: false,
+          onContinue: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+    if (mounted) setState(_reload);
+    await _loadSetup();
+  }
+
+  Future<void> _importSms() async {
+    final ingest = widget.smsIngestService;
+    if (ingest == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => SmsImportFlow(
+          ingestService: ingest,
+          profileService: widget.profileService,
+          providerSelectionService: widget.providerSelectionService,
+          themeController: ThemeController(widget.profileService),
+          inOnboarding: false,
+          onNotNow: () => Navigator.of(context).pop(),
+          onFinished: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+    if (mounted) setState(_reload);
+    // The scan screen also offers App Lock while waiting.
+    widget.onReturnFromProfile?.call();
+    await _loadSetup();
+  }
+
+  Future<void> _hideSetup() async {
+    await widget.profileService.setSetupChecklistHidden(true);
+    await _loadSetup();
+  }
+
+  List<SetupStep> _setupSteps(_SetupState setup) => [
+        SetupStep(
+          title: 'Turn on App Lock',
+          subtitle: 'Keep your balances private',
+          done: setup.appLock,
+          recommended: true,
+          onTap: _setUpAppLock,
+        ),
+        SetupStep(
+          title: 'Sort your transactions',
+          subtitle: 'Unlocks spending by category',
+          done: setup.sorted,
+          onTap: _sortTransactions,
+        ),
+        SetupStep(
+          title: 'Add your email',
+          subtitle: 'Names this profile on the device',
+          done: setup.email,
+          optional: true,
+          onTap: _openProfile,
+        ),
+        SetupStep(
+          title: 'Choose your accounts',
+          subtitle: 'Pick the providers you use',
+          done: setup.accounts,
+          onTap: _chooseAccounts,
+        ),
+        SetupStep(
+          title: 'Import your SMS history',
+          subtitle: 'Find your past transactions',
+          done: setup.sms,
+          onTap: _importSms,
+        ),
+      ];
 
   void _toggleBalanceHidden() {
     setState(() => _balanceHidden = !_balanceHidden);
@@ -241,27 +405,16 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const BrandMark(compact: true),
         actions: [
           IconButton(
-            icon: const Icon(Icons.person_outline),
+            // A dot stays on Profile while the setup checklist is
+            // hidden but not finished.
+            icon: Badge(
+              isLabelVisible: _setup != null && _setup!.hidden && !_setup!.allDone,
+              smallSize: 8,
+              backgroundColor: AppBrand.orangeLight,
+              child: const Icon(Icons.person_outline),
+            ),
             tooltip: 'Profile',
-            onPressed: () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ProfileScreen(
-                    profileService: widget.profileService,
-                    accountsService: widget.accountsService,
-                    providerSelectionService: widget.providerSelectionService,
-                    referralService: widget.referralService,
-                    smsIngestService: widget.smsIngestService,
-                  ),
-                ),
-              );
-              // Settings (reached from Profile) may have just enabled a
-              // provider and backfilled its history, or changed App
-              // Lock — reload so a newly-imported balance shows without
-              // needing a manual pull-to-refresh.
-              if (mounted) setState(_reload);
-              widget.onReturnFromProfile?.call();
-            },
+            onPressed: _openProfile,
           ),
         ],
       ),
@@ -269,6 +422,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onRefresh: () async {
           await widget.smsIngestService?.scanNewMessagesSince();
           setState(_reload);
+          await _loadSetup();
         },
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
@@ -306,6 +460,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
+            if (_setup case final setup? when !setup.hidden && !setup.allDone) ...[
+              const SizedBox(height: 16),
+              SetupChecklistCard(steps: _setupSteps(setup), onHide: _hideSetup),
+            ],
             const SizedBox(height: 16),
             // Pay now switches to its own bottom-nav tab (review batch
             // item #7/#8) rather than pushing a route, plus the
@@ -436,7 +594,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SectionHeader('Budgets', actionLabel: 'See all', onAction: widget.onOpenBudgets),
+                    SectionHeader('Budgets',
+                        actionLabel: 'See all', onAction: widget.onOpenBudgets),
                     AppCard(
                       onTap: widget.onOpenBudgets,
                       child: Row(
@@ -486,6 +645,14 @@ class _HomeScreenState extends State<HomeScreen> {
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const TransactionListSkeleton(rows: 4);
                 final recent = snapshot.data!.take(10).toList();
+                if (recent.isEmpty && _setup?.sms == false) {
+                  return const EmptyState(
+                    icon: Icons.sms_outlined,
+                    title: 'No transactions yet',
+                    message: 'Import your SMS history from the checklist above to '
+                        'see your past MoMo and bank activity.',
+                  );
+                }
                 if (recent.isEmpty) {
                   return const EmptyState(
                     icon: Icons.receipt_long_outlined,
@@ -660,4 +827,25 @@ class _MiniCategoryChart extends StatelessWidget {
       ],
     );
   }
+}
+
+class _SetupState {
+  const _SetupState({
+    required this.hidden,
+    required this.appLock,
+    required this.sorted,
+    required this.email,
+    required this.accounts,
+    required this.sms,
+  });
+
+  final bool hidden;
+  final bool appLock;
+  final bool sorted;
+  final bool email;
+  final bool accounts;
+  final bool sms;
+
+  // Email is optional, so it never keeps the checklist open.
+  bool get allDone => appLock && sorted && accounts && sms;
 }

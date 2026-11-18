@@ -9,6 +9,9 @@ analyzer:
     - assets/follow_along/**
     # Same reason: local-only assets/planning material, not app code.
     - public/**
+    - build/**
+    - android/**
+    - web/**
 
 linter:
   rules:

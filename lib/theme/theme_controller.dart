@@ -9,22 +9,24 @@ import '../profile/user_profile_service.dart';
 /// (`MaterialApp`, in `IMomoApp`) sits *above* the widget that owns the
 /// database and services (`HomeShell`) — the smallest correct bridge is
 /// a single app-global listenable rather than restructuring who owns
-/// the database. Defaults to [ThemeMode.light] before any load, per
-/// product decision: a user who never chose gets Light, not
-/// follow-system.
+/// the database. Defaults to [ThemeMode.system] (Auto): Appearance
+/// moved out of onboarding into Settings, so a user who never chose
+/// follows their phone — which also keeps the startup loader matching
+/// Android's native splash.
 class ThemeController {
   ThemeController(this._profileService);
 
   final UserProfileService _profileService;
 
-  static final ValueNotifier<ThemeMode> mode = ValueNotifier(ThemeMode.light);
+  static final ValueNotifier<ThemeMode> mode = ValueNotifier(ThemeMode.system);
 
   static ThemeMode parse(String? stored) => switch (stored) {
         'dark' => ThemeMode.dark,
-        'system' => ThemeMode.system,
-        // 'light', null (never chose), or an unrecognized value all
-        // resolve to Light — never crash the app over a bad row.
-        _ => ThemeMode.light,
+        'light' => ThemeMode.light,
+        // 'system', null (never chose — onboarding no longer asks), or
+        // an unrecognized value all resolve to Auto — never crash the
+        // app over a bad row.
+        _ => ThemeMode.system,
       };
 
   static String encode(ThemeMode mode) => switch (mode) {

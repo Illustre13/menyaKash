@@ -8,6 +8,7 @@ import '../../sms/sms_ingest_service.dart';
 import '../../theme/provider_assets.dart';
 import '../../theme/theme_controller.dart';
 import '../../widgets/coming_soon_popup.dart';
+import '../setup/appearance_screen.dart';
 import 'provider_backfill_popup.dart';
 
 /// Settings (spec Phase 7, extended in the UI sprint): Appearance,
@@ -39,8 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   UserProfileData? _profile;
   List<ProviderSelectionOption>? _providerOptions;
 
-  Future<void> _setTheme(ThemeMode mode) async {
-    await _themeController.setMode(mode);
+  Future<void> _openAppearance() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => AppearanceScreen(themeController: _themeController)),
+    );
     if (mounted) setState(() {});
   }
 
@@ -123,32 +126,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(
               children: [
                 const _SectionHeader('Appearance'),
-                RadioGroup<ThemeMode>(
-                  groupValue: ThemeController.mode.value,
-                  onChanged: (mode) => _setTheme(mode!),
-                  child: const Column(
-                    children: [
-                      RadioListTile<ThemeMode>(
-                        title: Text('Light'),
-                        value: ThemeMode.light,
-                      ),
-                      RadioListTile<ThemeMode>(
-                        title: Text('Dark'),
-                        value: ThemeMode.dark,
-                      ),
-                      RadioListTile<ThemeMode>(
-                        title: Text('System'),
-                        subtitle: Text('Follow your phone\'s setting'),
-                        value: ThemeMode.system,
-                      ),
-                    ],
-                  ),
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('Appearance'),
+                  subtitle: Text(switch (ThemeController.mode.value) {
+                    ThemeMode.light => 'Light',
+                    ThemeMode.dark => 'Dark',
+                    ThemeMode.system => 'Auto (follows your phone)',
+                  }),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openAppearance,
                 ),
                 const Divider(),
                 const _SectionHeader('Security'),
                 SwitchListTile(
                   title: const Text('App Lock'),
-                  subtitle: const Text('Require fingerprint, face, PIN, or pattern to open Menya Kash'),
+                  subtitle:
+                      const Text('Require fingerprint, face, PIN, or pattern to open Menya Kash'),
                   value: profile.appLockEnabled,
                   onChanged: _toggleAppLock,
                 ),
@@ -202,7 +196,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ListTile(
                   leading: const Icon(Icons.save_outlined),
                   title: const Text('Local Backup'),
-                  subtitle: const Text('Export or restore a backup file — never sent over a network'),
+                  subtitle:
+                      const Text('Export or restore a backup file — never sent over a network'),
                   onTap: () => showComingSoonPopup(
                     context,
                     feature: 'Local Backup',

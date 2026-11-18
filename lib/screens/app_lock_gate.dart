@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 
-import '../theme/app_theme.dart';
+import '../menyacash_loader.dart';
 
 /// Gates access to [child] behind the device's own biometric/PIN/
 /// pattern prompt whenever [enabled] is true (review batch item #5) —
@@ -50,13 +50,14 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     // App Lock was just turned on/off in Settings (same running
     // session) — re-evaluate rather than keep whatever state applied
     // under the old setting.
-    if (widget.enabled != oldWidget.enabled) {
-      if (widget.enabled) {
-        setState(() => _unlocked = false);
-        _authenticate();
-      } else {
-        setState(() => _unlocked = true);
-      }
+    //
+    // Turning it ON needs no immediate re-lock: every enable path
+    // (setup screen, Settings, the scan screen) already ran a successful
+    // device unlock seconds ago, so prompting again here would just be a
+    // confusing second fingerprint ask. The gate locks on the next
+    // return from background as usual.
+    if (widget.enabled != oldWidget.enabled && !widget.enabled) {
+      setState(() => _unlocked = true);
     }
   }
 
@@ -137,17 +138,17 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.10),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(Icons.lock_outline, size: 48, color: scheme.primary),
+              // Animated brand mark instead of a static logo + lock icon.
+              const MenyaLoader(size: 112, semanticsLabel: 'Menya Kash'),
+              const SizedBox(height: 24),
+              Text(
+                'Menya Kash',
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.3),
               ),
-              const SizedBox(height: 20),
-              const BrandMark(),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Text(
                 'Locked for your privacy',
                 style: Theme.of(context).textTheme.titleMedium,
@@ -158,17 +159,14 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
                 Text(_error!, style: TextStyle(color: scheme.error), textAlign: TextAlign.center),
               ],
               const SizedBox(height: 24),
-              if (_authenticating)
-                const CircularProgressIndicator()
-              else
-                FilledButton.icon(
-                  onPressed: _authenticate,
-                  icon: const Icon(Icons.fingerprint),
-                  label: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                    child: Text('Unlock'),
-                  ),
+              FilledButton.icon(
+                onPressed: _authenticating ? null : _authenticate,
+                icon: const Icon(Icons.fingerprint),
+                label: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  child: Text('Unlock'),
                 ),
+              ),
             ],
           ),
         ),

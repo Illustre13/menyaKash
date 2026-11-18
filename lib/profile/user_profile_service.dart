@@ -116,4 +116,52 @@ class UserProfileService {
     final profile = await currentProfile();
     return profile?.onboardingCompletedAt != null;
   }
+
+  /// Upserts [companion] onto the single profile row.
+  Future<void> _write(UserProfileCompanion companion) async {
+    final existing = await currentProfile();
+    if (existing == null) {
+      await _db.into(_db.userProfile).insert(companion);
+      return;
+    }
+    await (_db.update(_db.userProfile)..where((tbl) => tbl.id.equals(existing.id)))
+        .write(companion);
+  }
+
+  /// Counts one app launch (post-onboarding) and returns the new total —
+  /// the App Lock reminder waits for the 3rd open.
+  Future<int> recordAppOpen() async {
+    final count = ((await currentProfile())?.appOpenCount ?? 0) + 1;
+    await _write(UserProfileCompanion(appOpenCount: Value(count)));
+    return count;
+  }
+
+  /// Hides (or brings back) Home's "Finish setting up" checklist.
+  Future<void> setSetupChecklistHidden(bool hidden) =>
+      _write(UserProfileCompanion(setupChecklistHidden: Value(hidden)));
+
+  /// Ticks the checklist's "Sort your transactions" step.
+  Future<void> markTransactionsSorted() =>
+      _write(UserProfileCompanion(setupSortedAt: Value(DateTime.now())));
+
+  /// The App Lock reminder's "Not now": snooze 7 days and count the
+  /// dismissal (two stop it for good — see [shouldShowAppLockReminder]).
+  Future<void> snoozeAppLockReminder({DateTime? now}) async {
+    final profile = await currentProfile();
+    final at = now ?? DateTime.now();
+    await _write(UserProfileCompanion(
+      appLockReminderDismissals: Value((profile?.appLockReminderDismissals ?? 0) + 1),
+      appLockReminderSnoozedUntil: Value(at.add(const Duration(days: 7))),
+    ));
+  }
+
+  /// Reminder rules: from the 3rd app open, only while App Lock is off,
+  /// at most two "Not now"s, and never inside a 7-day snooze.
+  static bool shouldShowAppLockReminder(UserProfileData? profile, {DateTime? now}) {
+    if (profile == null || profile.appLockEnabled) return false;
+    if (profile.appOpenCount < 3) return false;
+    if (profile.appLockReminderDismissals >= 2) return false;
+    final until = profile.appLockReminderSnoozedUntil;
+    return until == null || (now ?? DateTime.now()).isAfter(until);
+  }
 }

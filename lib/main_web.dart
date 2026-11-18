@@ -16,6 +16,7 @@ import 'providers/provider_selection_service.dart';
 import 'screens/budgets_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/insights_screen.dart';
+import 'screens/pay/send_money_screen.dart';
 import 'screens/pay_screen.dart';
 import 'screens/transactions_screen.dart';
 import 'theme/app_theme.dart';
@@ -111,6 +112,18 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         simSelectionController: _simSelectionController,
         savedMeterService: _savedMeterService,
         onOpenPay: () => setState(() => _index = 1),
+        onOpenSendMoney: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => SendMoneyScreen(
+              contactsService: _contactsService,
+              categorizationService: _categorizationService,
+              favoriteContactsService: _favoriteContactsService,
+              plannedPaymentService: _plannedPaymentService,
+              simSelectionController: _simSelectionController,
+              accountsService: _accountsService,
+            ),
+          ),
+        ),
         onOpenTransactions: () => setState(() => _index = 2),
         onOpenBudgets: () => setState(() => _index = 3),
         onOpenInsights: () => setState(() => _index = 4),
@@ -121,11 +134,14 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         favoriteContactsService: _favoriteContactsService,
         simSelectionController: _simSelectionController,
         plannedPaymentService: _plannedPaymentService,
+        accountsService: _accountsService,
+        savedMeterService: _savedMeterService,
       ),
       TransactionsScreen(db: _db, categorizationService: _categorizationService),
       BudgetsScreen(budgetService: _budgetService),
       InsightsScreen(
         analytics: _analyticsService,
+        categorizationService: _categorizationService,
         onReviewUncategorized: () => setState(() => _index = 2),
       ),
     ];
@@ -150,7 +166,7 @@ class _WebDevHomeShellState extends State<WebDevHomeShell> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.bolt_outlined), label: 'Pay'),
-          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Transactions'),
+          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Activity'),
           NavigationDestination(icon: Icon(Icons.track_changes), label: 'Budgets'),
           NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),
         ],
